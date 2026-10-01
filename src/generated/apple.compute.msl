@@ -1,0 +1,269 @@
+#include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
+using namespace metal;
+
+#line 15 "src/shaders/apple.slang"
+float hash21_0(float2 p_0)
+{
+
+#line 16
+    return fract(sin(dot(p_0, float2(127.09999847412109375f, 311.70001220703125f))) * 43758.546875f);
+}
+
+float valueNoise_0(float2 p_1)
+{
+
+#line 20
+    float2 i_0 = floor(p_1);
+    float2 f_0 = p_1 - i_0;
+    float2 u_0 = f_0 * f_0 * (float2(3.0f)  - float2(2.0f)  * f_0);
+
+#line 27
+    float _S1 = u_0.x;
+
+#line 27
+    return mix(mix(hash21_0(i_0), hash21_0(i_0 + float2(1.0f, 0.0f)), _S1), mix(hash21_0(i_0 + float2(0.0f, 1.0f)), hash21_0(i_0 + float2(1.0f, 1.0f)), _S1), u_0.y);
+}
+
+float fbm_0(float2 p_2, int octaves_0, float lacunarity_0, float gain_0)
+{
+
+#line 30
+    float2 q_0 = p_2;
+
+#line 30
+    int i_1 = int(0);
+
+#line 30
+    float amp_0 = 0.5f;
+
+#line 30
+    float sum_0 = 0.0f;
+
+#line 35
+    for(;;)
+    {
+
+#line 35
+        if(i_1 < octaves_0)
+        {
+        }
+        else
+        {
+
+#line 35
+            break;
+        }
+
+#line 36
+        float sum_1 = sum_0 + amp_0 * valueNoise_0(q_0);
+        float2 _S2 = q_0 * float2(lacunarity_0)  + float2(17.29999923706054688f, 9.10000038146972656f);
+        float amp_1 = amp_0 * gain_0;
+
+#line 35
+        int _S3 = i_1 + int(1);
+
+#line 35
+        q_0 = _S2;
+
+#line 35
+        i_1 = _S3;
+
+#line 35
+        amp_0 = amp_1;
+
+#line 35
+        sum_0 = sum_1;
+
+#line 35
+    }
+
+#line 40
+    return sum_0;
+}
+
+
+
+
+float sdAppleBody_0(float2 p_3)
+{
+
+#line 47
+    thread float2 q_1 = p_3;
+    float _S4 = p_3.y;
+
+#line 48
+    q_1.x = q_1.x / (1.0f - 0.18000000715255737f * _S4 * _S4);
+
+    float _S5 = p_3.x;
+
+#line 50
+    float _S6 = _S5 * _S5;
+
+#line 50
+    float _S7 = _S4 - 0.44999998807907104f;
+    float _S8 = _S4 + 0.5f;
+    return length(q_1) - 0.51999998092651367f + 0.10000000149011612f * exp(-40.0f * (_S6 + _S7 * _S7)) + 0.05999999865889549f * exp(-60.0f * (_S6 + _S8 * _S8));
+}
+
+float sdSegment_0(float2 p_4, float2 a_0, float2 b_0)
+{
+
+#line 56
+    float2 pa_0 = p_4 - a_0;
+    float2 ba_0 = b_0 - a_0;
+
+    return length(pa_0 - ba_0 * float2(clamp(dot(pa_0, ba_0) / dot(ba_0, ba_0), 0.0f, 1.0f)) );
+}
+
+float sdEllipse_0(float2 p_5, float2 c_0, float2 r_0, float rot_0)
+{
+
+#line 63
+    float cs_0 = cos(rot_0);
+    float sn_0 = sin(rot_0);
+    float2 q_2 = p_5 - c_0;
+    float _S9 = q_2.x;
+
+#line 66
+    float _S10 = q_2.y;
+    return (length(float2(cs_0 * _S9 + sn_0 * _S10, - sn_0 * _S9 + cs_0 * _S10) / r_0) - 1.0f) * min(r_0.x, r_0.y);
+}
+
+struct AppleDist_0
+{
+    float body_0;
+    float stem_0;
+    float leaf_0;
+    float all_0;
+};
+
+
+#line 77
+AppleDist_0 appleDistances_0(float2 p_6)
+{
+
+#line 78
+    thread AppleDist_0 d_0;
+    float _S11 = sdAppleBody_0(p_6);
+
+#line 79
+    (&d_0)->body_0 = _S11;
+    float _S12 = sdSegment_0(p_6, float2(0.0f, 0.37999999523162842f), float2(0.10000000149011612f, 0.74000000953674316f)) - 0.02199999988079071f;
+
+#line 80
+    (&d_0)->stem_0 = _S12;
+    float _S13 = sdEllipse_0(p_6, float2(0.30000001192092896f, 0.6600000262260437f), float2(0.2199999988079071f, 0.08500000089406967f), 0.55000001192092896f);
+
+#line 81
+    (&d_0)->leaf_0 = _S13;
+    (&d_0)->all_0 = min(_S11, min(_S12, _S13));
+    return d_0;
+}
+
+
+#line 6 "src/shaders/common.slang"
+struct SceneUniforms_0
+{
+    float3 iResolution_0;
+    float iTime_0;
+    float4 iFbm_0;
+    float iColorMode_0;
+    float iManual_0;
+};
+
+
+#line 13 "src/shaders/apple.slang"
+struct KernelContext_0
+{
+    SceneUniforms_0 constant* Uniforms_0;
+    texture2d<float, access::read_write> out_tex_0;
+};
+
+
+#line 88
+[[kernel]] void computeMain(uint3 id_0 [[thread_position_in_grid]], SceneUniforms_0 constant* Uniforms_1 [[buffer(0)]], texture2d<float, access::read_write> out_tex_1 [[texture(0)]])
+{
+
+#line 88
+    thread KernelContext_0 kernelContext_0;
+
+#line 88
+    (&kernelContext_0)->Uniforms_0 = Uniforms_1;
+
+#line 88
+    (&kernelContext_0)->out_tex_0 = out_tex_1;
+    uint2 _S14 = id_0.xy;
+
+#line 89
+    if(any(_S14 >= uint2(Uniforms_1->iResolution_0.xy)))
+    {
+
+#line 89
+        return;
+    }
+
+#line 90
+    float2 fragCoord_0 = float2(float(id_0.x), Uniforms_1->iResolution_0.y - float(id_0.y));
+
+
+
+    float2 _S15 = (fragCoord_0 - float2(0.5f)  * Uniforms_1->iResolution_0.xy) / float2(Uniforms_1->iResolution_0.y) ;
+
+#line 94
+    thread float2 p_7 = _S15;
+    float t_0 = (&kernelContext_0)->Uniforms_0->iTime_0;
+
+
+    p_7 = _S15 * float2(1.5f)  + float2(0.0f, 0.05000000074505806f);
+    p_7.y = p_7.y - 0.01999999955296516f * sin(t_0 * 0.80000001192092896f);
+
+    int octaves_1 = int((&kernelContext_0)->Uniforms_0->iFbm_0.x);
+    float lacunarity_1 = (&kernelContext_0)->Uniforms_0->iFbm_0.y;
+    float gain_1 = (&kernelContext_0)->Uniforms_0->iFbm_0.z;
+
+    float grain_0 = fbm_0(fragCoord_0 * float2(0.34999999403953552f)  / float2(Uniforms_1->iResolution_0.y)  * float2(40.0f) , octaves_1, lacunarity_1, gain_1);
+
+
+    AppleDist_0 d_1 = appleDistances_0(p_7);
+
+
+    float wobble_0 = fbm_0(p_7 * float2(6.0f)  + float2(3.70000004768371582f, 1.29999995231628418f), octaves_1, lacunarity_1, gain_1) - 0.25f;
+    float dInk_0 = d_1.all_0 + 0.03500000014901161f * wobble_0;
+
+    float aa_0 = 1.5f / Uniforms_1->iResolution_0.y;
+
+#line 122
+    float3 paper_0 = float3(0.93000000715255737f, 0.9100000262260437f, 0.86000001430511475f) * float3((0.92000001668930054f + 0.07999999821186066f * grain_0))  * float3((1.0f - 0.25f * dot(p_7, p_7)))  * float3((1.0f - 0.25f * exp(- pow(length((p_7 - float2(0.05000000074505806f, -0.62000000476837158f)) / float2(0.47999998927116394f, 0.10000000149011612f)), 2.0f)))) ;
+
+#line 122
+    float3 col_0;
+
+
+    if(((&kernelContext_0)->Uniforms_0->iColorMode_0) > 0.5f)
+    {
+        float _S16 = - aa_0;
+
+#line 127
+        col_0 = mix(mix(mix(mix(paper_0, mix(float3(0.44999998807907104f, 0.05000000074505806f, 0.05000000074505806f), float3(0.85000002384185791f, 0.15000000596046448f, 0.10000000149011612f), float3(clamp(0.64999997615814209f - 0.89999997615814209f * d_1.body_0 - 0.40000000596046448f * p_7.y, 0.0f, 1.20000004768371582f)) ) * float3((0.89999997615814209f + 0.20000000298023224f * grain_0))  + float3((0.55000001192092896f * exp(- pow(length((p_7 - float2(-0.18000000715255737f, 0.15999999642372131f)) / float2(0.15999999642372131f, 0.23999999463558197f)), 2.0f)))) , float3(smoothstep(aa_0, _S16, d_1.body_0)) ), float3(0.30000001192092896f, 0.18000000715255737f, 0.07999999821186066f), float3(smoothstep(aa_0, _S16, d_1.stem_0)) ), float3(0.25f, 0.44999998807907104f, 0.15000000596046448f) * float3((0.85000002384185791f + 0.30000001192092896f * grain_0)) , float3(smoothstep(aa_0, _S16, d_1.leaf_0)) ), float3(0.10000000149011612f) , float3((smoothstep(0.01200000010430813f, 0.0020000000949949f, abs(d_1.all_0 + 0.00999999977648258f * wobble_0)) * 0.85000002384185791f)) );
+
+#line 125
+    }
+    else
+    {
+
+#line 150
+        float _S17 = - aa_0;
+
+#line 150
+        col_0 = mix(mix(paper_0, float3(0.07999999821186066f)  * float3((0.75f + 0.25f * fbm_0(p_7 * float2(30.0f) , octaves_1, lacunarity_1, gain_1))) , float3(smoothstep(aa_0, _S17, dInk_0)) ), paper_0, float3((smoothstep(aa_0, _S17, sdSegment_0(p_7, float2(0.11999999731779099f, 0.72000002861022949f), float2(0.46000000834465027f, 0.57999998331069946f)) - 0.00400000018998981f) * smoothstep(aa_0, _S17, d_1.leaf_0) * 0.69999998807907104f)) );
+
+#line 125
+    }
+
+#line 160
+    (&kernelContext_0)->out_tex_0.write(float4(col_0, 1.0f),_S14);
+    return;
+}
+

@@ -1,0 +1,71 @@
+#include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
+using namespace metal;
+
+#line 19 "src/shaders/ui.slang"
+struct vertMain_Result_0
+{
+    float4 position_0 [[position]];
+    float2 uv_0 [[user(TEXCOORD)]];
+    float4 color_0 [[user(COLOR)]];
+};
+
+
+#line 19
+struct vertexInput_0
+{
+    float2 position_1 [[attribute(0)]];
+    float2 uv_1 [[attribute(1)]];
+    float4 color_1 [[attribute(2)]];
+};
+
+
+#line 5
+struct UiUniforms_0
+{
+    float2 iResolution_0;
+    float2 _pad_0;
+};
+
+
+#line 25
+struct VertexOutput_0
+{
+    float4 position_2;
+    float2 uv_2;
+    float4 color_2;
+};
+
+
+#line 25
+[[vertex]] vertMain_Result_0 vertMain(vertexInput_0 _S1 [[stage_in]], UiUniforms_0 constant* Uniforms_0 [[buffer(0)]])
+{
+
+#line 35
+    float2 clip_0 = _S1.position_1 / Uniforms_0->iResolution_0 * float2(2.0f)  - float2(1.0f) ;
+
+#line 33
+    thread VertexOutput_0 output_0;
+
+
+    (&output_0)->position_2 = float4(clip_0.x, - clip_0.y, 0.0f, 1.0f);
+    (&output_0)->uv_2 = _S1.uv_1;
+    (&output_0)->color_2 = _S1.color_1;
+
+#line 38
+    thread vertMain_Result_0 _S2;
+
+#line 38
+    (&_S2)->position_0 = output_0.position_2;
+
+#line 38
+    (&_S2)->uv_0 = output_0.uv_2;
+
+#line 38
+    (&_S2)->color_0 = output_0.color_2;
+
+#line 38
+    return _S2;
+}
+

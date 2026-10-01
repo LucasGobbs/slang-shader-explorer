@@ -1,0 +1,7 @@
+{
+  "[odin]": {
+    "editor.defaultFormatter": "danielgavin.ols",
+    "editor.formatOnSave": true
+  },
+  "ols.server.path": "/opt/homebrew/bin/ols"
+}

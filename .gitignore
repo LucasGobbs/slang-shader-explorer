@@ -1,0 +1,9 @@
+/odin
+main
+main_debug
+*.dSYM/
+output.ppm
+output.qoi
+odin_bin
+*.bin
+vendor/goose/goose-build

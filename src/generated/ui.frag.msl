@@ -1,0 +1,47 @@
+#include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
+using namespace metal;
+
+#line 90 "core"
+struct pixelOutput_0
+{
+    float4 output_0 [[color(0)]];
+};
+
+
+#line 90
+struct pixelInput_0
+{
+    float2 uv_0 [[user(TEXCOORD)]];
+    float4 color_0 [[user(COLOR)]];
+};
+
+
+#line 17 "src/shaders/ui.slang"
+struct KernelContext_0
+{
+    texture2d<float, access::sample> atlas_tex_0;
+    sampler atlas_sampler_0;
+};
+
+
+#line 43
+[[fragment]] pixelOutput_0 pixelMain(pixelInput_0 _S1 [[stage_in]], float4 position_0 [[position]], texture2d<float, access::sample> atlas_tex_1 [[texture(0)]], sampler atlas_sampler_1 [[sampler(0)]])
+{
+
+#line 43
+    thread KernelContext_0 kernelContext_0;
+
+#line 43
+    (&kernelContext_0)->atlas_tex_0 = atlas_tex_1;
+
+#line 43
+    (&kernelContext_0)->atlas_sampler_0 = atlas_sampler_1;
+
+#line 43
+    pixelOutput_0 _S2 = { float4(_S1.color_0.xyz, _S1.color_0.w * ((atlas_tex_1).sample((atlas_sampler_1), (_S1.uv_0))).x) };
+
+    return _S2;
+}
+

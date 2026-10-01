@@ -1,0 +1,18 @@
+{
+  "$schema": "https://raw.githubusercontent.com/DanielGavin/ols/master/misc/ols.schema.json",
+  "odin_command": "/opt/homebrew/bin/odin",
+  "enable_format": true,
+  "enable_hover": true,
+  "enable_document_symbols": true,
+  "enable_references": true,
+  "enable_diagnostics": true,
+  "profile": "default",
+  "profiles": [
+    {
+      "name": "default",
+      "os": "darwin",
+      "arch": "arm64",
+      "checker_path": ["src"]
+    }
+  ]
+}

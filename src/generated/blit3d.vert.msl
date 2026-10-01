@@ -1,0 +1,105 @@
+#include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
+using namespace metal;
+
+#line 90 "core"
+struct vertMain_Result_0
+{
+    float4 pos_0 [[position]];
+    float3 world_0 [[user(TEXCOORD)]];
+    float3 color_0 [[user(TEXCOORD_1)]];
+};
+
+
+#line 6 "src/shaders/blit3d.slang"
+struct CameraUniforms_0
+{
+    float3 camPos_0;
+    float aspect_0;
+    float3 fwd_0;
+    float fovTan_0;
+    float3 right_0;
+    float nearZ_0;
+    float3 up_0;
+    float farZ_0;
+};
+
+struct KernelContext_0
+{
+    texture2d<float, access::sample> tex_0;
+    sampler tex_sampler_0;
+    CameraUniforms_0 constant* Camera_0;
+};
+
+
+#line 29
+struct VsOut_0
+{
+    float4 pos_1;
+    float3 world_1;
+    float3 color_1;
+};
+
+
+#line 29
+[[vertex]] vertMain_Result_0 vertMain(uint vid_0 [[vertex_id]], texture2d<float, access::sample> tex_1 [[texture(0)]], sampler tex_sampler_1 [[sampler(0)]], CameraUniforms_0 constant* Camera_1 [[buffer(0)]])
+{
+
+#line 29
+    thread KernelContext_0 kernelContext_0;
+
+#line 29
+    (&kernelContext_0)->tex_0 = tex_1;
+
+#line 29
+    (&kernelContext_0)->tex_sampler_0 = tex_sampler_1;
+
+#line 29
+    (&kernelContext_0)->Camera_0 = Camera_1;
+
+#line 38
+    uint cell_0 = vid_0 / 6U;
+
+
+    uint2 _S1 = uint2(1U, 0U);
+
+#line 41
+    uint2 _S2 = uint2(0U, 1U);
+
+#line 40
+    array<uint2, int(6)> _S3 = { { uint2(0U, 0U), _S1, _S2, _S2, _S1, uint2(1U, 1U) } };
+
+#line 45
+    float2 uv_0 = float2(uint2(cell_0 % 256U, cell_0 / 256U) + _S3[vid_0 % 6U]) / float2(256.0f) ;
+    float4 sample_0 = ((tex_1).sample((tex_sampler_1), (uv_0), level((0.0f))));
+
+    float3 world_2 = float3(uv_0.x * 2.0f - 1.0f, sample_0.x * 0.34999999403953552f, uv_0.y * 2.0f - 1.0f);
+
+    float3 rel_0 = world_2 - Camera_1->camPos_0;
+    float z_0 = dot(rel_0, Camera_1->fwd_0);
+
+#line 37
+    thread VsOut_0 o_0;
+
+#line 56
+    (&o_0)->pos_1 = float4(dot(rel_0, Camera_1->right_0) / (Camera_1->aspect_0 * Camera_1->fovTan_0), dot(rel_0, Camera_1->up_0) / Camera_1->fovTan_0, clamp((z_0 - Camera_1->nearZ_0) / (Camera_1->farZ_0 - Camera_1->nearZ_0), 0.0f, 1.0f), z_0);
+    (&o_0)->world_1 = world_2;
+    (&o_0)->color_1 = sample_0.xyz;
+
+#line 58
+    thread vertMain_Result_0 _S4;
+
+#line 58
+    (&_S4)->pos_0 = o_0.pos_1;
+
+#line 58
+    (&_S4)->world_0 = o_0.world_1;
+
+#line 58
+    (&_S4)->color_0 = o_0.color_1;
+
+#line 58
+    return _S4;
+}
+

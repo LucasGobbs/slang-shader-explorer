@@ -1,0 +1,25 @@
+{
+  "outputDir": "src/generated",
+  "parameterOutputDir": "src/generated",
+  "package": "generated",
+  "gooseImport": "../../vendor/goose/src",
+  "targets": ["metal", "spirv"],
+  "shaders": [
+    {
+      "name": "apple",
+      "source": "src/shaders/apple.slang"
+    },
+    {
+      "name": "blit",
+      "source": "src/shaders/blit.slang"
+    },
+    {
+      "name": "blit3d",
+      "source": "src/shaders/blit3d.slang"
+    },
+    {
+      "name": "ui",
+      "source": "src/shaders/ui.slang"
+    }
+  ]
+}

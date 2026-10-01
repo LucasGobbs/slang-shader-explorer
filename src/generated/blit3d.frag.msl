@@ -1,0 +1,31 @@
+#include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
+using namespace metal;
+
+#line 29 "src/shaders/blit3d.slang"
+struct pixelOutput_0
+{
+    float4 output_0 [[color(0)]];
+};
+
+
+#line 29
+struct pixelInput_0
+{
+    float3 world_0 [[user(TEXCOORD)]];
+    float3 color_0 [[user(TEXCOORD_1)]];
+};
+
+
+#line 63
+[[fragment]] pixelOutput_0 pixelMain(pixelInput_0 _S1 [[stage_in]], float4 pos_0 [[position]])
+{
+
+#line 63
+    pixelOutput_0 _S2 = { float4(_S1.color_0 * float3((0.34999999403953552f + 0.64999997615814209f * max(0.0f, dot(normalize(cross(dfdx(_S1.world_0), dfdy(_S1.world_0))), normalize(float3(0.5f, 0.80000001192092896f, 0.30000001192092896f)))))) , 1.0f) };
+
+#line 68
+    return _S2;
+}
+
