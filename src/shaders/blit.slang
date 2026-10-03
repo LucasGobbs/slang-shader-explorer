@@ -19,7 +19,10 @@ VsOut vertMain(uint vertexIndex : SV_VertexID) {
     // Fullscreen triangle; uv interpolates 0..1 across the screen.
     float2 p = float2((vertexIndex << 1) & 2, vertexIndex & 2);
     o.pos = float4(p * 2.0 - 1.0, 0.0, 1.0);
-    o.uv = p;
+    // Metal NDC +y is up but texture uv (0,0) is the top row: without the
+    // flip, texture row 0 (scene top, fragCoord.y = iResolution.y) lands
+    // at the bottom of the screen and the scene renders upside down.
+    o.uv = float2(p.x, 1.0 - p.y);
     return o;
 }
 

@@ -1,0 +1,1 @@
+{"scene":"rings","nodes":[{"key":"params","kind":"params","x":40.0,"y":40.0},{"key":"comp:scenes/rings/rings:computeMain","kind":"compute","x":280.0,"y":40.0}],"links":[{"from":"params:Uniforms","to":"comp:scenes/rings/rings:computeMain:Uniforms"},{"from":"params:Params","to":"comp:scenes/rings/rings:computeMain:Params"}]}
