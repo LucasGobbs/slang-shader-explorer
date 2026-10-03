@@ -889,7 +889,6 @@ scene_set_manual :: proc(scene: ^RuntimeScene, v: f32) {
 // --------------------------------------------------------------------
 // Frame submission
 
-GIF_SECONDS :: 5.0
 GIF_FPS :: 17
 GIF_DIR :: "/tmp/inktober_gif"
 
@@ -1024,8 +1023,8 @@ submit_scene_frame :: proc(
 	return sdl.SubmitGPUCommandBufferAndAcquireFence(cmd)
 }
 
-// GIF export (UI "export gif" button): re-renders the active scene at
-// GIF_FPS from t=0 to t=GIF_SECONDS, writes each frame as
+// GIF export (EXPORT panel's "export gif" button): re-renders the active
+// scene at GIF_FPS from t=start_s to t=end_s, writes each frame as
 // /tmp/inktober_gif/frame_NNN.png, then runs the two-pass ffmpeg
 // palettegen/paletteuse pipeline to produce exports/<scene>_<datetime>.gif.
 // Blocking: the window freezes for the few seconds this takes.
@@ -1036,12 +1035,19 @@ export_gif :: proc(
 	res: ^SceneResources,
 	width, height: i32,
 	color: bool,
+	start_s, end_s: f32,
 ) {
-	frames := int(GIF_SECONDS * GIF_FPS)
+	frames := max(1, int((end_s - start_s) * GIF_FPS))
 	os.make_directory(GIF_DIR) // fine if it already exists
+	// Clear frames from previous exports: frames are numbered from 0, so a
+	// shorter range would otherwise pick up stale frames left by a longer
+	// one (ffmpeg's frame_%03d.png pattern matches everything on disk).
+	for i in 0 ..< 100000 {
+		if err := os.remove(fmt.tprintf("%s/frame_%03d.png", GIF_DIR, i)); err != nil do break
+	}
 
 	for i in 0 ..< frames {
-		time_s := f32(i) / GIF_FPS
+		time_s := start_s + f32(i)/GIF_FPS
 		camera := camera_orbit(time_s * 0.4, 0.55, f32(width) / f32(height))
 		scene_write_uniforms(
 			scene,

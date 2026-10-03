@@ -449,6 +449,7 @@ main :: proc() {
 	set_title(window, scene_mgr.scenes[scene_mgr.current].title)
 
 	app_time: f32
+	ui.time = &app_time
 	prev_ticks := sdl.GetTicks()
 	main_loop: for {
 		scene_poll(&scene_mgr, gpu)
@@ -743,6 +744,8 @@ main :: proc() {
 				width,
 				height,
 				ui.params.color,
+				ui.gif_start,
+				ui.gif_end,
 			)
 		}
 

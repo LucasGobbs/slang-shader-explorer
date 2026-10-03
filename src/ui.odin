@@ -42,7 +42,7 @@ UiParams :: struct {
 ExportRequest :: enum {
 	NONE,
 	PNG, // current frame, at the current app_time
-	GIF, // 5 s loop from t=0, rendered frame by frame + ffmpeg
+	GIF, // [gif_start, gif_end] rendered frame by frame + ffmpeg
 }
 
 // Sidebar modes (VS Code-style activity bar): each icon docks a different
@@ -53,12 +53,19 @@ SidebarMode :: enum {
 	CONTROLS,
 	FILES,
 	GRAPH,
+	EXPORT,
 }
 
 Ui :: struct {
 	params:         UiParams,
 	scene_request:  int,
 	export_request: ExportRequest,
+	// Points at main's app_time: the controls panel shows it live and
+	// edits write through to the running clock.
+	time:           ^f32,
+	// GIF export window (seconds), editable in the EXPORT panel.
+	gif_start:      f32,
+	gif_end:        f32,
 	// True while the mouse is over a UI window or a widget owns the drag;
 	// the shader click (iMouse.z) must ignore those clicks.
 	captures_mouse: bool,
@@ -82,6 +89,7 @@ ui_init :: proc() -> ^Ui {
 	ui.open = true
 	ui.panel_open = true
 	ui.font_size = 16
+	ui.gif_end = 5
 	return ui
 }
 
@@ -443,6 +451,14 @@ ui_strip_button :: proc(ui: ^Ui, mode: SidebarMode, index: int) -> bool {
 		im.DrawList_AddLine(dl, {cx - 2, cy - 2}, {cx + 3, cy + 3}, icon_col, 1.4)
 		im.DrawList_AddCircle(dl, {cx - 5, cy - 4}, 3.2, icon_col)
 		im.DrawList_AddCircle(dl, {cx + 6, cy + 5}, 3.2, icon_col)
+	case .EXPORT:
+		// Export: an arrow dropping into a tray.
+		im.DrawList_AddLine(dl, {cx, cy - 7}, {cx, cy + 1}, icon_col, 1.4)
+		im.DrawList_AddLine(dl, {cx - 4, cy - 3}, {cx, cy + 1}, icon_col, 1.4)
+		im.DrawList_AddLine(dl, {cx + 4, cy - 3}, {cx, cy + 1}, icon_col, 1.4)
+		im.DrawList_AddLine(dl, {cx - 7, cy + 3}, {cx - 7, cy + 7}, icon_col, 1.4)
+		im.DrawList_AddLine(dl, {cx + 7, cy + 3}, {cx + 7, cy + 7}, icon_col, 1.4)
+		im.DrawList_AddLine(dl, {cx - 7, cy + 7}, {cx + 7, cy + 7}, icon_col, 1.4)
 	}
 	return clicked
 }
@@ -471,7 +487,7 @@ ui_activity_strip :: proc(ui: ^Ui, ied: ^ImGuiEditor) {
 	im.PushStyleVar(.WindowRounding, 0) // docked chrome is square
 	if im.Begin("##activity_strip", nil, flags) {
 		dl := im.GetWindowDrawList()
-		modes := [3]SidebarMode{.CONTROLS, .FILES, .GRAPH}
+		modes := [4]SidebarMode{.CONTROLS, .FILES, .GRAPH, .EXPORT}
 		for m, i in modes {
 			if ui_strip_button(ui, m, i) {
 				if ui.mode == m {
@@ -557,6 +573,8 @@ ui_panel_width :: proc(mode: SidebarMode, display_w: f32) -> f32 {
 		return 280
 	case .GRAPH:
 		return display_w * 0.52
+	case .EXPORT:
+		return 280
 	}
 	return 300
 }
@@ -565,18 +583,14 @@ ui_panel_width :: proc(mode: SidebarMode, display_w: f32) -> f32 {
 // the active scene's reflected params).
 ui_controls_panel :: proc(ui: ^Ui, sm: ^SceneManager) {
 	im.TextDisabled("controls")
+	// Time: the running clock, shown live. Type a value (or use the +/-
+	// steppers) and commit with Enter to jump the scene to that time.
+	im.SetNextItemWidth(140)
+	im.InputFloat("time (s)", ui.time, 0.5, 5.0, "%.2f")
 	im.Checkbox("color", &ui.params.color)
 	im.Checkbox("3D view", &ui.params.view3d)
 	im.SameLine()
 	im.Checkbox("grid", &ui.params.grid)
-
-	if im.Button("export png") {
-		ui.export_request = .PNG
-	}
-	im.SameLine()
-	if im.Button("export gif (5s)") {
-		ui.export_request = .GIF
-	}
 	im.TextUnformatted(fmt.ctprintf("gen %.2f ms", ui.gen_ms))
 
 	if im.CollapsingHeader("interaction", {}) {
@@ -605,6 +619,31 @@ ui_controls_panel :: proc(ui: ^Ui, sm: ^SceneManager) {
 				}
 			}
 		}
+	}
+}
+
+// EXPORT mode: frame and animation capture. PNG grabs the current frame
+// at the current app_time; the GIF re-renders [gif_start, gif_end] frame
+// by frame and assembles it with ffmpeg (blocking, a few seconds).
+ui_export_panel :: proc(ui: ^Ui) {
+	im.TextDisabled("export")
+	if im.Button("export png") {
+		ui.export_request = .PNG
+	}
+	im.SameLine()
+	im.TextUnformatted(fmt.ctprintf("frame at t = %.2f s", ui.time^))
+
+	im.SeparatorText("gif")
+	im.SetNextItemWidth(140)
+	im.InputFloat("start (s)", &ui.gif_start, 0.5, 1.0, "%.2f")
+	im.SetNextItemWidth(140)
+	im.InputFloat("end (s)", &ui.gif_end, 0.5, 1.0, "%.2f")
+	ui.gif_start = max(ui.gif_start, 0)
+	ui.gif_end = max(ui.gif_end, ui.gif_start)
+	frames := max(1, int((ui.gif_end - ui.gif_start) * GIF_FPS))
+	im.TextUnformatted(fmt.ctprintf("%d frames @ %d fps", frames, GIF_FPS))
+	if im.Button("export gif") {
+		ui.export_request = .GIF
 	}
 }
 
@@ -708,6 +747,8 @@ ui_build :: proc(
 			}
 		case .GRAPH:
 			ing_panel(ing, ied, sm.scenes[sm.current].title)
+		case .EXPORT:
+			ui_export_panel(ui)
 		}
 	}
 	im.End()
