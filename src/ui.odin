@@ -1,413 +1,778 @@
 package main
 
-import shader_glue "./generated"
+import im "../vendor/odin-imgui"
 import "core:fmt"
-import "core:mem"
+import "core:math"
+import "core:strings"
 import sdl "vendor:sdl3"
-import mu "vendor:microui"
-import goose_sdl "../vendor/goose/src/adapters"
 
-// Minimal overlay UI on top of the scene pass: microui builds the widgets
-// (sliders for the FBM uniforms, scene buttons, pause), this renderer turns
-// microui's draw commands into textured quads drawn by src/shaders/ui.slang
-// in a second render pass with load_op = .LOAD.
+// Controls UI: Dear ImGui is the only UI toolkit in the app (microui was
+// retired). The editor panel lives in imgui_editor.odin; this file owns
+// the title bar (the borderless window's chrome, with the scene selector),
+// the Controls window, the scene's reflected params (a visually separate
+// section), and the normalized graph-paper grid drawn behind the windows
+// via the background draw list.
 //
-// microui works in window points (same units as SDL mouse events); all
-// geometry is scaled to pixels when vertices are emitted, so the overlay is
-// crisp on Retina displays.
+// Widget map from the old microui build:
+//   checkboxes          -> im.Checkbox
+//   radio buttons       -> im.RadioButton
+//   tree nodes          -> im.CollapsingHeader
+//   scene sliders       -> im.SliderFloat
+//   scene color params  -> im.ColorEdit3 (was three sliders)
+//   grid overlay        -> im.GetBackgroundDrawList lines + text
 
-UI_VERTEX_CAPACITY :: 16384
-
-UiVertex :: struct {
-	position: [2]f32,
-	uv:       [2]f32,
-	color:    [4]f32,
-}
-
-UiSegment :: struct {
-	first: u32,
-	count: u32,
-	clip:  sdl.Rect, // pixels
+InteractionMode :: enum {
+	AUTOROTATE,
+	MOUSE_ROTATE,
 }
 
 UiParams :: struct {
-	octaves:      f32,
-	lacunarity:   f32,
-	gain:         f32,
-	paused:       bool,
-	color:        bool,
-	view3d:       bool, // false = flat blit, true = 3D heightfield view
+	paused:      bool,
+	color:       bool,
+	view3d:      bool, // false = flat blit, true = 3D heightfield view
+	grid:        bool, // graph-paper overlay with labeled axes
+	paper:       int,  // index into the paper textures list (assets/)
+	skybox:      int,  // index into skybox textures (assets/skybox/), -1 = none
+	model_index: int,  // index into the loaded models (assets/models/)
+	interaction: InteractionMode,
+}
+
+// One-shot export actions requested from the Controls window; main picks
+// them up after the frame's compute pass and resets them to .NONE.
+ExportRequest :: enum {
+	NONE,
+	PNG, // current frame, at the current app_time
+	GIF, // 5 s loop from t=0, rendered frame by frame + ffmpeg
+}
+
+// Sidebar modes (VS Code-style activity bar): each icon docks a different
+// tool panel on the left edge. CONTROLS is the classic params window,
+// FILES the shader file browser, GRAPH the shader node graph. The code
+// editor stays OUT of the sidebar by design: it is a floating window (F1).
+SidebarMode :: enum {
+	CONTROLS,
+	FILES,
+	GRAPH,
 }
 
 Ui :: struct {
-	ctx:           mu.Context,
-	pipeline:      ^sdl.GPUGraphicsPipeline,
-	atlas:         ^sdl.GPUTexture,
-	sampler:       ^sdl.GPUSampler,
-	vertex_buffer: ^sdl.GPUBuffer,
-	transfer:      ^sdl.GPUTransferBuffer,
-	params:        UiParams,
-	scene_request: int,
+	params:         UiParams,
+	scene_request:  int,
+	export_request: ExportRequest,
 	// True while the mouse is over a UI window or a widget owns the drag;
 	// the shader click (iMouse.z) must ignore those clicks.
 	captures_mouse: bool,
-	gen_ms:        f32, // average compute texture generation time, fed by main
-	scale:         f32, // pixels per window point, set each frame
-	verts:         [dynamic]UiVertex,
-	segments:      [dynamic]UiSegment,
+	open:           bool, // whole sidebar (SPACE = zen mode hides it)
+	mode:           SidebarMode,
+	panel_open:     bool, // clicking the active mode's icon collapses the panel
+	files_frame:    int,  // frame counter pacing the FILES-mode rescan
+	font_size:      f32,  // UI font in points; the code font is ImGuiEditor.font_size
+	// Set by the title bar's close button; main breaks the loop on it.
+	quit_requested: bool,
+	gen_ms:         f32, // average compute texture generation time, fed by main
+	// A scene created from a template: selected as soon as the watcher
+	// discovers the new file (next frame's rescan).
+	pending_scene:  string,
 }
 
-// Ui is large (microui Context is ~270KB), so it lives on the heap.
-ui_init :: proc(gpu: ^sdl.GPUDevice, window: ^sdl.Window) -> ^Ui {
+ui_init :: proc() -> ^Ui {
 	ui := new(Ui)
-	ui.params = {octaves = 6, lacunarity = 2.03, gain = 0.5, paused = false}
+	ui.params.skybox = -1 // start with no skybox
 	ui.scene_request = -1
-	ui.scale = 1
-
-	mu.init(&ui.ctx)
-	ui.ctx.text_width = mu.default_atlas_text_width
-	ui.ctx.text_height = mu.default_atlas_text_height
-
-	// Font atlas texture (single-channel alpha).
-	ui.atlas = sdl.CreateGPUTexture(
-		gpu,
-		{
-			type = .D2,
-			format = .R8_UNORM,
-			usage = {.SAMPLER},
-			width = mu.DEFAULT_ATLAS_WIDTH,
-			height = mu.DEFAULT_ATLAS_HEIGHT,
-			layer_count_or_depth = 1,
-			num_levels = 1,
-		},
-	); assert(ui.atlas != nil)
-	ui.sampler = sdl.CreateGPUSampler(
-		gpu,
-		{
-			min_filter = .NEAREST,
-			mag_filter = .NEAREST,
-			mipmap_mode = .NEAREST,
-			address_mode_u = .CLAMP_TO_EDGE,
-			address_mode_v = .CLAMP_TO_EDGE,
-			address_mode_w = .CLAMP_TO_EDGE,
-		},
-	); assert(ui.sampler != nil)
-
-	// One-time atlas upload on its own command buffer.
-	upload := sdl.CreateGPUTransferBuffer(
-		gpu,
-		{usage = .UPLOAD, size = mu.DEFAULT_ATLAS_WIDTH * mu.DEFAULT_ATLAS_HEIGHT},
-	); assert(upload != nil)
-	ptr := sdl.MapGPUTransferBuffer(gpu, upload, false)
-	mem.copy(ptr, raw_data(mu.default_atlas_alpha[:]), mu.DEFAULT_ATLAS_WIDTH * mu.DEFAULT_ATLAS_HEIGHT)
-	sdl.UnmapGPUTransferBuffer(gpu, upload)
-	cmd := sdl.AcquireGPUCommandBuffer(gpu)
-	copy_pass := sdl.BeginGPUCopyPass(cmd)
-	sdl.UploadToGPUTexture(
-		copy_pass,
-		{transfer_buffer = upload, offset = 0},
-		{
-			texture = ui.atlas,
-			w = mu.DEFAULT_ATLAS_WIDTH,
-			h = mu.DEFAULT_ATLAS_HEIGHT,
-			d = 1,
-		},
-		false,
-	)
-	sdl.EndGPUCopyPass(copy_pass)
-	ok := sdl.SubmitGPUCommandBuffer(cmd); assert(ok)
-	sdl.ReleaseGPUTransferBuffer(gpu, upload)
-
-	// Geometry buffers, reused every frame.
-	ui.vertex_buffer = sdl.CreateGPUBuffer(
-		gpu,
-		{usage = {.VERTEX}, size = UI_VERTEX_CAPACITY * size_of(UiVertex)},
-	); assert(ui.vertex_buffer != nil)
-	ui.transfer = sdl.CreateGPUTransferBuffer(
-		gpu,
-		{usage = .UPLOAD, size = UI_VERTEX_CAPACITY * size_of(UiVertex)},
-	); assert(ui.transfer != nil)
-
-	// Pipeline from the goose glue; alpha blending over the scene.
-	vertex_glue := shader_glue.ui_vertex()
-	vertex_shader := create_shader(gpu, vertex_glue, .VERTEX); assert(vertex_shader != nil)
-	fragment_glue := shader_glue.ui_fragment()
-	fragment_shader := create_shader(gpu, fragment_glue, .FRAGMENT)
-	assert(fragment_shader != nil)
-	free_blob_if_hot(vertex_glue)
-	free_blob_if_hot(fragment_glue)
-
-	reflected := shader_glue.ui_vertex_attributes(UiVertex)
-	attributes := goose_sdl.convert_vertex_attributes(reflected[:], context.temp_allocator)
-
-	ui.pipeline = sdl.CreateGPUGraphicsPipeline(
-		gpu,
-		{
-			vertex_shader = vertex_shader,
-			fragment_shader = fragment_shader,
-			primitive_type = .TRIANGLELIST,
-			vertex_input_state = {
-				num_vertex_buffers = 1,
-				vertex_buffer_descriptions = &(sdl.GPUVertexBufferDescription {
-					slot = 0,
-					pitch = size_of(UiVertex),
-					input_rate = .VERTEX,
-				}),
-				num_vertex_attributes = u32(len(attributes)),
-				vertex_attributes = raw_data(attributes),
-			},
-			target_info = {
-				num_color_targets = 1,
-				color_target_descriptions = &(sdl.GPUColorTargetDescription {
-					format = sdl.GetGPUSwapchainTextureFormat(gpu, window),
-					blend_state = {
-						src_color_blendfactor = .SRC_ALPHA,
-						dst_color_blendfactor = .ONE_MINUS_SRC_ALPHA,
-						color_blend_op = .ADD,
-						src_alpha_blendfactor = .SRC_ALPHA,
-						dst_alpha_blendfactor = .ONE_MINUS_SRC_ALPHA,
-						alpha_blend_op = .ADD,
-						color_write_mask = {.R, .G, .B, .A},
-						enable_blend = true,
-					},
-				}),
-			},
-		},
-	); assert(ui.pipeline != nil)
-
-	sdl.ReleaseGPUShader(gpu, vertex_shader)
-	sdl.ReleaseGPUShader(gpu, fragment_shader)
+	ui.open = true
+	ui.panel_open = true
+	ui.font_size = 16
 	return ui
 }
 
-ui_handle_event :: proc(ui: ^Ui, event: sdl.Event) {
-	#partial switch event.type {
-	case .MOUSE_MOTION:
-		mu.input_mouse_move(&ui.ctx, i32(event.motion.x), i32(event.motion.y))
-	case .MOUSE_BUTTON_DOWN:
-		if event.button.button == sdl.BUTTON_LEFT {
-			mu.input_mouse_down(&ui.ctx, i32(event.button.x), i32(event.button.y), .LEFT)
+// Professional dark theme: tinted neutral layers (bar / panel / frame) so
+// scene colors stay true, and one warm amber accent reserved for selection
+// and active state. Restrained color strategy — the accent never decorates,
+// it marks state. Applied once after the ImGui context exists.
+ui_apply_style :: proc() {
+	style := im.GetStyle()
+	style.WindowPadding = {12, 10}
+	style.FramePadding = {10, 5}
+	style.ItemSpacing = {10, 8}
+	style.ItemInnerSpacing = {8, 6}
+	style.IndentSpacing = 18
+	style.ScrollbarSize = 12
+	style.GrabMinSize = 8
+	style.WindowRounding = 8
+	style.ChildRounding = 6
+	style.FrameRounding = 5
+	style.PopupRounding = 6
+	style.ScrollbarRounding = 6
+	style.GrabRounding = 5
+	style.WindowBorderSize = 1
+	style.FrameBorderSize = 0
+
+	accent := im.Vec4{0.91, 0.66, 0.34, 1}
+	colors := &style.Colors
+	colors[im.Col.Text] = {0.87, 0.88, 0.90, 1}
+	colors[im.Col.TextDisabled] = {0.46, 0.48, 0.52, 1}
+	colors[im.Col.WindowBg] = {0.075, 0.079, 0.094, 0.97}
+	colors[im.Col.ChildBg] = {0, 0, 0, 0}
+	colors[im.Col.PopupBg] = {0.098, 0.103, 0.122, 0.98}
+	colors[im.Col.Border] = {1, 1, 1, 0.09}
+	colors[im.Col.BorderShadow] = {0, 0, 0, 0}
+	colors[im.Col.FrameBg] = {1, 1, 1, 0.05}
+	colors[im.Col.FrameBgHovered] = {1, 1, 1, 0.10}
+	colors[im.Col.FrameBgActive] = {1, 1, 1, 0.15}
+	colors[im.Col.TitleBg] = {0.075, 0.079, 0.094, 1}
+	colors[im.Col.TitleBgActive] = {0.075, 0.079, 0.094, 1}
+	colors[im.Col.TitleBgCollapsed] = {0.075, 0.079, 0.094, 1}
+	colors[im.Col.MenuBarBg] = {0.102, 0.106, 0.125, 1}
+	colors[im.Col.ScrollbarBg] = {0, 0, 0, 0}
+	colors[im.Col.ScrollbarGrab] = {1, 1, 1, 0.14}
+	colors[im.Col.ScrollbarGrabHovered] = {1, 1, 1, 0.22}
+	colors[im.Col.ScrollbarGrabActive] = {1, 1, 1, 0.30}
+	colors[im.Col.CheckMark] = accent
+	colors[im.Col.SliderGrab] = {1, 1, 1, 0.28}
+	colors[im.Col.SliderGrabActive] = accent
+	colors[im.Col.Button] = {1, 1, 1, 0.07}
+	colors[im.Col.ButtonHovered] = {1, 1, 1, 0.13}
+	colors[im.Col.ButtonActive] = {1, 1, 1, 0.18}
+	colors[im.Col.Header] = {1, 1, 1, 0.06}
+	colors[im.Col.HeaderHovered] = {1, 1, 1, 0.11}
+	colors[im.Col.HeaderActive] = {1, 1, 1, 0.16}
+	colors[im.Col.Separator] = {1, 1, 1, 0.10}
+	colors[im.Col.SeparatorHovered] = accent
+	colors[im.Col.SeparatorActive] = accent
+	colors[im.Col.ResizeGrip] = {1, 1, 1, 0.10}
+	colors[im.Col.ResizeGripHovered] = {1, 1, 1, 0.20}
+	colors[im.Col.ResizeGripActive] = {1, 1, 1, 0.28}
+	colors[im.Col.TabHovered] = {1, 1, 1, 0.12}
+	colors[im.Col.TextSelectedBg] = {0.91, 0.66, 0.34, 0.35}
+	colors[im.Col.NavCursor] = accent
+}
+
+// ---------------------------------------------------------------------------
+// Title bar: the app window is borderless (SDL_WINDOW_BORDERLESS), so this
+// bar IS the window chrome — traffic-light controls on the left, the scene
+// selector beside them, "+ new", drag space, pause on the right. Empty bar
+// space drags the window and edge strips resize it via the SDL hit test in
+// main.odin; every interactive widget registers its rect below so the hit
+// test leaves clicks on them to ImGui.
+
+TITLEBAR_H :: 38
+
+titlebar_hot_rects: [8][4]f32 // min.x, min.y, max.x, max.y in window coords
+titlebar_hot_count: int
+
+titlebar_reset_hot :: proc() {
+	titlebar_hot_count = 0
+}
+
+titlebar_mark_hot :: proc() {
+	if titlebar_hot_count >= len(titlebar_hot_rects) do return
+	mn := im.GetItemRectMin()
+	mx := im.GetItemRectMax()
+	titlebar_hot_rects[titlebar_hot_count] = {mn.x, mn.y, mx.x, mx.y}
+	titlebar_hot_count += 1
+}
+
+titlebar_point_hot :: proc(x, y: f32) -> bool {
+	for r in titlebar_hot_rects[:titlebar_hot_count] {
+		if x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3] do return true
+	}
+	return false
+}
+
+TrafficAction :: enum {
+	NONE,
+	CLOSE,
+	MINIMIZE,
+	MAXIMIZE,
+}
+
+// macOS-style traffic lights: 12 px circles on 20 px slots. Glyphs appear
+// when any of the three is hovered; the whole set dims to gray while the
+// window is unfocused, matching native behavior.
+ui_traffic_lights :: proc(focused: bool) -> TrafficAction {
+	action := TrafficAction.NONE
+	dl := im.GetWindowDrawList()
+	group_min := im.GetCursorScreenPos()
+	mouse := im.GetMousePos()
+	slot := f32(20)
+	group_hovered :=
+		mouse.x >= group_min.x && mouse.x < group_min.x + 3 * slot &&
+		mouse.y >= group_min.y && mouse.y < group_min.y + slot
+
+	cols := [3]im.Vec4 {
+		{0.95, 0.38, 0.35, 1}, // close
+		{0.97, 0.75, 0.19, 1}, // minimize
+		{0.19, 0.78, 0.26, 1}, // zoom
+	}
+	acts := [3]TrafficAction{.CLOSE, .MINIMIZE, .MAXIMIZE}
+	ids := [3]cstring{"##tl_close", "##tl_min", "##tl_max"}
+	for i in 0 ..< 3 {
+		pos := im.GetCursorScreenPos()
+		center := im.Vec2{pos.x + slot / 2, pos.y + slot / 2}
+		if im.InvisibleButton(ids[i], {slot, slot}) {
+			action = acts[i]
 		}
-	case .MOUSE_BUTTON_UP:
-		if event.button.button == sdl.BUTTON_LEFT {
-			mu.input_mouse_up(&ui.ctx, i32(event.button.x), i32(event.button.y), .LEFT)
+		titlebar_mark_hot()
+		col := focused ? cols[i] : im.Vec4{0.40, 0.40, 0.43, 1}
+		im.DrawList_AddCircleFilled(dl, center, 6, im.GetColorU32Vec4(col))
+		if group_hovered {
+			glyph := im.GetColorU32Vec4({0, 0, 0, 0.55})
+			switch i {
+			case 0: // close: x
+				im.DrawList_AddLine(dl, {center.x - 3, center.y - 3}, {center.x + 3, center.y + 3}, glyph, 1.3)
+				im.DrawList_AddLine(dl, {center.x - 3, center.y + 3}, {center.x + 3, center.y - 3}, glyph, 1.3)
+			case 1: // minimize: -
+				im.DrawList_AddLine(dl, {center.x - 3.2, center.y}, {center.x + 3.2, center.y}, glyph, 1.3)
+			case 2: // zoom: square
+				im.DrawList_AddRect(dl, {center.x - 2.8, center.y - 2.8}, {center.x + 2.8, center.y + 2.8}, glyph, 0, 1.2)
+			}
 		}
-	case .MOUSE_WHEEL:
-		mu.input_scroll(&ui.ctx, 0, i32(event.wheel.y * -30))
+		if i < 2 do im.SameLine(0, 0)
+	}
+	return action
+}
+
+// Title bar (see above): scene switching, scene creation from templates,
+// window controls. Returns a scene index when a scene was selected.
+ui_toolbar :: proc(ui: ^Ui, sm: ^SceneManager, window: ^sdl.Window, ied: ^ImGuiEditor) -> int {
+	request := -1
+	titlebar_reset_hot()
+
+	// A template-created scene appeared in the rescan: select it now.
+	if ui.pending_scene != "" {
+		for &s, i in sm.scenes {
+			if s.title == ui.pending_scene {
+				request = i
+				break
+			}
+		}
+		if request >= 0 {
+			delete(ui.pending_scene)
+			ui.pending_scene = ""
+		}
+	}
+
+	io := im.GetIO()
+	im.SetNextWindowPos({0, 0}, .Always)
+	im.SetNextWindowSize({io.DisplaySize.x, TITLEBAR_H}, .Always)
+	flags := im.WindowFlags {
+		.NoTitleBar,
+		.NoResize,
+		.NoMove,
+		.NoCollapse,
+		.NoSavedSettings,
+		.NoScrollbar,
+		.NoScrollWithMouse,
+		.NoBringToFrontOnFocus,
+	}
+	im.PushStyleColorVec4(.WindowBg, {0.102, 0.106, 0.125, 1})
+	im.PushStyleColorVec4(.Border, {0, 0, 0, 0})
+	im.PushStyleVarVec2(.WindowPadding, {0, 0})
+	im.PushStyleVarVec2(.FramePadding, {10, 4})
+	// Docked chrome is square (DESIGN.md): rounding belongs to floating
+	// surfaces only — rounded corners against flush neighbors clash.
+	im.PushStyleVar(.WindowRounding, 0)
+	if im.Begin("##titlebar", nil, flags) {
+		dl := im.GetWindowDrawList()
+		focused := .INPUT_FOCUS in sdl.GetWindowFlags(window)
+
+		// Window controls; the scene selector sits right beside them.
+		im.SetCursorPos({10, (TITLEBAR_H - 20) / 2})
+		#partial switch ui_traffic_lights(focused) {
+		case .CLOSE:
+			ui.quit_requested = true
+		case .MINIMIZE:
+			sdl.MinimizeWindow(window)
+		case .MAXIMIZE:
+			if .MAXIMIZED in sdl.GetWindowFlags(window) {
+				sdl.RestoreWindow(window)
+			} else {
+				sdl.MaximizeWindow(window)
+			}
+		}
+
+		frame_y := (TITLEBAR_H - (im.GetFontSize() + 8)) / 2
+
+		// Scene selector: click shows all available scenes.
+		im.SetCursorPos({10 + 3 * 20 + 8, frame_y})
+		im.SetNextItemWidth(210)
+		im.PushStyleColorVec4(.FrameBg, {1, 1, 1, 0.05})
+		im.PushStyleColorVec4(.FrameBgHovered, {1, 1, 1, 0.10})
+		im.PushStyleColorVec4(.FrameBgActive, {1, 1, 1, 0.15})
+		current_title := len(sm.scenes) > 0 ? sm.scenes[sm.current].title : "?"
+		if im.BeginCombo("##scene_sel", strings_to_c(current_title), {.HeightLarge}) {
+			for &s, i in sm.scenes {
+				if im.Selectable(strings_to_c(s.title), i == sm.current, {}) {
+					request = i
+				}
+			}
+			im.EndCombo()
+		}
+		titlebar_mark_hot()
+		im.PopStyleColor(3)
+
+		// Scene templates: create a new scene file from scratch.
+		im.SameLine(0, 8)
+		im.SetNextItemWidth(92)
+		if im.BeginCombo("##new_kind", "+ new", {}) {
+			if im.Selectable("compute", false, {}) {
+				if title, ok := scene_create(.COMPUTE); ok {
+					ui.pending_scene = title
+				}
+			}
+			if im.Selectable("graphics 2d", false, {}) {
+				if title, ok := scene_create(.GRAPHICS_2D); ok {
+					ui.pending_scene = title
+				}
+			}
+			if im.Selectable("graphics 3d", false, {}) {
+				if title, ok := scene_create(.GRAPHICS_3D); ok {
+					ui.pending_scene = title
+				}
+			}
+			im.EndCombo()
+		}
+		titlebar_mark_hot()
+
+		// Save-all (floppy) left of pause: same drawn-icon style — the font
+		// has no 💾 glyph. Saves every dirty editor tab (ied_save_all).
+		size := f32(22)
+		save_x := io.DisplaySize.x - 10 - size - 8 - size
+		im.SetCursorPos({save_x, (TITLEBAR_H - size) / 2})
+		if im.InvisibleButton("##saveall", {size, size}) {
+			ied_save_all(ied)
+		}
+		titlebar_mark_hot()
+		smn := im.GetItemRectMin()
+		if im.IsItemHovered() {
+			im.DrawList_AddRectFilled(dl, smn, {smn.x + size, smn.y + size}, im.GetColorU32Vec4({1, 1, 1, 0.08}), 4)
+		}
+		scol := im.GetColorU32(.Text, 1.0)
+		// Floppy: body outline, metal shutter top-right, label slot bottom.
+		im.DrawList_AddRect(dl, {smn.x + 3, smn.y + 3}, {smn.x + size - 3, smn.y + size - 3}, scol, 2, 1.4)
+		im.DrawList_AddRectFilled(dl, {smn.x + size - 10, smn.y + 4}, {smn.x + size - 5, smn.y + 10}, scol)
+		im.DrawList_AddRect(dl, {smn.x + 7, smn.y + size - 9}, {smn.x + size - 7, smn.y + size - 4}, scol, 1, 1.2)
+
+		// Pause/play on the right edge: drawn icon (the font has no ⏸/▶
+		// glyphs), one block showing the action the click will take —
+		// bars while running, triangle while paused.
+		im.SetCursorPos({io.DisplaySize.x - 10 - size, (TITLEBAR_H - size) / 2})
+		if im.InvisibleButton("##pauseplay", {size, size}) {
+			ui.params.paused = !ui.params.paused
+		}
+		titlebar_mark_hot()
+		mn := im.GetItemRectMin()
+		if im.IsItemHovered() {
+			im.DrawList_AddRectFilled(dl, mn, {mn.x + size, mn.y + size}, im.GetColorU32Vec4({1, 1, 1, 0.08}), 4)
+		}
+		col := im.GetColorU32(.Text, 1.0)
+		if ui.params.paused {
+			pad := f32(5)
+			im.DrawList_AddTriangleFilled(
+				dl,
+				{mn.x + pad, mn.y + pad},
+				{mn.x + pad, mn.y + size - pad},
+				{mn.x + size - pad + 2, mn.y + size / 2},
+				col,
+			)
+		} else {
+			bw := f32(4)
+			im.DrawList_AddRectFilled(dl, {mn.x + 5, mn.y + 5}, {mn.x + 5 + bw, mn.y + size - 5}, col)
+			im.DrawList_AddRectFilled(dl, {mn.x + size - 5 - bw, mn.y + 5}, {mn.x + size - 5, mn.y + size - 5}, col)
+		}
+
+		// 1 px separator between the chrome and the scene below.
+		im.DrawList_AddLine(
+			dl,
+			{0, TITLEBAR_H - 0.5},
+			{io.DisplaySize.x, TITLEBAR_H - 0.5},
+			im.GetColorU32Vec4({1, 1, 1, 0.09}),
+		)
+	}
+	im.End()
+	im.PopStyleVar(3)
+	im.PopStyleColor(2)
+	return request
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar: a VS Code-style activity strip (narrow icon column) plus a
+// docked panel whose content depends on the selected mode. The strip stays
+// when the panel is collapsed; SPACE (zen mode) hides both.
+
+STRIP_W :: 46
+
+// One activity-strip button: 34 px slot with a glyph drawn via the draw
+// list (the font has no icon glyphs). The active mode gets the accent
+// tint; hover brightens. Returns true when clicked.
+ui_strip_button :: proc(ui: ^Ui, mode: SidebarMode, index: int) -> bool {
+	dl := im.GetWindowDrawList()
+	im.SetCursorPos({(STRIP_W - 34) / 2, 10 + f32(index) * 42})
+	pos := im.GetCursorScreenPos()
+	clicked := im.InvisibleButton(fmt.ctprintf("##strip%d", index), {34, 34})
+	hovered := im.IsItemHovered()
+	active := ui.mode == mode && ui.panel_open
+	cx := pos.x + 17
+	cy := pos.y + 17
+	if active {
+		im.DrawList_AddRectFilled(dl, pos, {pos.x + 34, pos.y + 34}, im.GetColorU32Vec4({0.91, 0.66, 0.34, 0.22}), 8)
+	} else if hovered {
+		im.DrawList_AddRectFilled(dl, pos, {pos.x + 34, pos.y + 34}, im.GetColorU32Vec4({1, 1, 1, 0.07}), 8)
+	}
+	icon_col := im.GetColorU32Vec4(
+		active ? im.Vec4{0.91, 0.66, 0.34, 1} :
+		hovered ? im.Vec4{0.87, 0.88, 0.90, 1} : im.Vec4{0.55, 0.57, 0.62, 1},
+	)
+	switch mode {
+	case .CONTROLS:
+		// Sliders: three rails with knobs at different offsets.
+		knobs := [3]f32{-2, 3, -4}
+		for k, i in knobs {
+			y := cy - 6 + f32(i) * 6
+			im.DrawList_AddLine(dl, {cx - 7, y}, {cx + 7, y}, icon_col, 1.4)
+			im.DrawList_AddCircleFilled(dl, {cx + k, y}, 2.2, icon_col)
+		}
+	case .FILES:
+		// Folder: body outline with a raised tab on the top edge.
+		im.DrawList_AddRect(dl, {cx - 8, cy - 4}, {cx + 8, cy + 7}, icon_col, 2, 1.4)
+		im.DrawList_AddLine(dl, {cx - 8, cy - 4}, {cx - 8, cy - 6}, icon_col, 1.4)
+		im.DrawList_AddLine(dl, {cx - 8, cy - 6}, {cx - 3, cy - 6}, icon_col, 1.4)
+		im.DrawList_AddLine(dl, {cx - 3, cy - 6}, {cx - 1, cy - 4}, icon_col, 1.4)
+	case .GRAPH:
+		// Graph: two nodes linked by an edge.
+		im.DrawList_AddLine(dl, {cx - 2, cy - 2}, {cx + 3, cy + 3}, icon_col, 1.4)
+		im.DrawList_AddCircle(dl, {cx - 5, cy - 4}, 3.2, icon_col)
+		im.DrawList_AddCircle(dl, {cx + 6, cy + 5}, 3.2, icon_col)
+	}
+	return clicked
+}
+
+// The icon column. Clicking a different mode selects it; clicking the
+// active mode's icon collapses/expands the panel (VS Code behavior). A
+// settings gear sits at the bottom: editor theme, font scale, and glass
+// mode (moved out of the editor toolbar).
+ui_activity_strip :: proc(ui: ^Ui, ied: ^ImGuiEditor) {
+	io := im.GetIO()
+	im.SetNextWindowPos({0, TITLEBAR_H}, .Always)
+	im.SetNextWindowSize({STRIP_W, io.DisplaySize.y - TITLEBAR_H}, .Always)
+	flags := im.WindowFlags {
+		.NoTitleBar,
+		.NoResize,
+		.NoMove,
+		.NoCollapse,
+		.NoSavedSettings,
+		.NoScrollbar,
+		.NoScrollWithMouse,
+		.NoBringToFrontOnFocus,
+	}
+	im.PushStyleColorVec4(.WindowBg, {0.102, 0.106, 0.125, 1})
+	im.PushStyleColorVec4(.Border, {0, 0, 0, 0})
+	im.PushStyleVarVec2(.WindowPadding, {0, 0})
+	im.PushStyleVar(.WindowRounding, 0) // docked chrome is square
+	if im.Begin("##activity_strip", nil, flags) {
+		dl := im.GetWindowDrawList()
+		modes := [3]SidebarMode{.CONTROLS, .FILES, .GRAPH}
+		for m, i in modes {
+			if ui_strip_button(ui, m, i) {
+				if ui.mode == m {
+					ui.panel_open = !ui.panel_open
+				} else {
+					ui.mode = m
+					ui.panel_open = true
+				}
+			}
+		}
+
+		// Settings gear pinned to the bottom edge. Glyph: ring + 8 spokes.
+		gear_y := io.DisplaySize.y - TITLEBAR_H - 34 - 10
+		im.SetCursorPos({(STRIP_W - 34) / 2, gear_y})
+		gpos := im.GetCursorScreenPos()
+		if im.InvisibleButton("##strip_settings", {34, 34}) {
+			im.OpenPopup("##settings")
+		}
+		ghov := im.IsItemHovered()
+		if ghov {
+			im.DrawList_AddRectFilled(dl, gpos, {gpos.x + 34, gpos.y + 34}, im.GetColorU32Vec4({1, 1, 1, 0.07}), 8)
+		}
+		gc := im.Vec2{gpos.x + 17, gpos.y + 17}
+		gcol := im.GetColorU32Vec4(
+			ghov ? im.Vec4{0.87, 0.88, 0.90, 1} : im.Vec4{0.55, 0.57, 0.62, 1},
+		)
+		im.DrawList_AddCircle(dl, gc, 3.2, gcol, 0, 1.4)
+		for i in 0 ..< 8 {
+			a := f32(i) * math.PI / 4
+			ca, sa := math.cos(a), math.sin(a)
+			im.DrawList_AddLine(dl, {gc.x + 5.2 * ca, gc.y + 5.2 * sa}, {gc.x + 7.8 * ca, gc.y + 7.8 * sa}, gcol, 1.4)
+		}
+
+		// Settings popup: appearance knobs, one place only. Two
+		// independent font sizes: the code editor's (pushed around the
+		// text component) and the UI's (style FontSizeBase). Captions sit
+		// on their own rows: trailing slider labels overflowed the
+		// auto-sized popup.
+		im.SetNextWindowPos({STRIP_W + 6, io.DisplaySize.y - 236}, .Appearing)
+		if im.BeginPopup("##settings", {}) {
+			im.TextDisabled("theme")
+			im.SetNextItemWidth(130)
+			if im.BeginCombo("##theme", strings_to_c(THEME_NAMES[ied.theme]), {}) {
+				for name, t in THEME_NAMES {
+					if im.Selectable(strings_to_c(name), t == ied.theme, {}) {
+						ied.theme = t
+						ied_apply_theme(ied)
+					}
+				}
+				im.EndCombo()
+			}
+			im.TextDisabled("editor font")
+			im.SetNextItemWidth(130)
+			im.SliderFloat("##edfont", &ied.font_size, 10, 28, "%.0f")
+			im.TextDisabled("ui font")
+			im.SetNextItemWidth(130)
+			if im.SliderFloat("##uifont", &ui.font_size, 12, 22, "%.0f") {
+				im.GetStyle().FontSizeBase = ui.font_size
+			}
+			if im.Checkbox("glass", &ied.bg_transparent) {
+				ite_set_glass(ied.handle, ied.bg_transparent, 0.55)
+			}
+			im.EndPopup()
+		}
+		// 1 px separator between the strip and the panel/scene.
+		im.DrawList_AddLine(
+			dl,
+			{STRIP_W - 0.5, TITLEBAR_H},
+			{STRIP_W - 0.5, io.DisplaySize.y},
+			im.GetColorU32Vec4({1, 1, 1, 0.09}),
+		)
+	}
+	im.End()
+	im.PopStyleVar(2)
+	im.PopStyleColor(2)
+}
+
+ui_panel_width :: proc(mode: SidebarMode, display_w: f32) -> f32 {
+	switch mode {
+	case .CONTROLS:
+		return 300
+	case .FILES:
+		return 280
+	case .GRAPH:
+		return display_w * 0.52
+	}
+	return 300
+}
+
+// CONTROLS mode: the classic controls (view options, export, interaction,
+// the active scene's reflected params).
+ui_controls_panel :: proc(ui: ^Ui, sm: ^SceneManager) {
+	im.TextDisabled("controls")
+	im.Checkbox("color", &ui.params.color)
+	im.Checkbox("3D view", &ui.params.view3d)
+	im.SameLine()
+	im.Checkbox("grid", &ui.params.grid)
+
+	if im.Button("export png") {
+		ui.export_request = .PNG
+	}
+	im.SameLine()
+	if im.Button("export gif (5s)") {
+		ui.export_request = .GIF
+	}
+	im.TextUnformatted(fmt.ctprintf("gen %.2f ms", ui.gen_ms))
+
+	if im.CollapsingHeader("interaction", {}) {
+		if im.RadioButton("autorotate", ui.params.interaction == .AUTOROTATE) {
+			ui.params.interaction = .AUTOROTATE
+		}
+		if im.RadioButton("mouse rotation", ui.params.interaction == .MOUSE_ROTATE) {
+			ui.params.interaction = .MOUSE_ROTATE
+		}
+	}
+
+	// The active scene's annotated params, in a visually separate section.
+	if len(sm.scenes) > 0 {
+		scene := &sm.scenes[sm.current]
+		if len(scene.widgets) > 0 {
+			im.SeparatorText(fmt.ctprintf("%s params", scene.title))
+			for &w, i in scene.widgets {
+				id := fmt.ctprintf("%s##w%d", w.label, i)
+				switch w.kind {
+				case .SLIDER:
+					im.SliderFloat(id, &w.value[0], w.min, w.max, "%.2f")
+				case .TOGGLE:
+					im.Checkbox(id, &w.on)
+				case .COLOR:
+					im.ColorEdit3(id, &w.value)
+				}
+			}
+		}
 	}
 }
 
-// Builds the widgets. Returns a scene index when a scene button was pressed.
-// Scenes are listed by compute shader file name in the Controls window; a
-// static overlay at the top-center shows a few lines about the active scene
-// (what it displays, what the colors mean). Both hide on SPACE.
-ui_build :: proc(
-	ui: ^Ui,
-	current_scene: int,
-	scene_names, scene_descriptions: []string,
-	frame_w, frame_h: i32,
-) -> int {
-	ui.scene_request = -1
-	ctx := &ui.ctx
-	mu.begin(ctx)
-	if mu.window(ctx, "Controls", {10, 10, 230, 460}) {
-		mu.layout_row(ctx, {80, -1})
-		mu.label(ctx, "octaves")
-		mu.slider(ctx, &ui.params.octaves, 1, 12, 1)
-		mu.label(ctx, "lacunarity")
-		mu.slider(ctx, &ui.params.lacunarity, 1.0, 4.0, 0.01)
-		mu.label(ctx, "gain")
-		mu.slider(ctx, &ui.params.gain, 0.05, 0.95, 0.01)
-		mu.checkbox(ctx, "pause time", &ui.params.paused)
-		mu.checkbox(ctx, "color", &ui.params.color)
-		mu.checkbox(ctx, "3D view", &ui.params.view3d)
+// FILES mode: every .slang under src/shaders. Scenes switch the running
+// scene; shared modules open in the editor (jumping to EDITOR mode).
+// Returns a scene index when a scene was picked.
+ui_files_panel :: proc(ui: ^Ui, sm: ^SceneManager, ed: ^ImGuiEditor) -> int {
+	request := -1
 
-		buf: [64]u8
-		mu.layout_row(ctx, {-1})
-		mu.label(ctx, fmt.bprintf(buf[:], "gen %.2f ms", ui.gen_ms))
-
-		// Scene list: one text button per compute shader file.
-		mu.layout_row(ctx, {-1})
-		for name, i in scene_names {
-			label := fmt.tprintf("[%s]", name) if current_scene == i else name
-			if .SUBMIT in mu.button(ctx, label) {
-				ui.scene_request = i
-			}
-		}
+	// Keep the list fresh (template-created scenes, external files); the
+	// rescan is append-only and cheap.
+	ui.files_frame += 1
+	if ui.files_frame % 120 == 1 {
+		ied_rescan(ed)
 	}
 
-	// Static overlay at the top-center: a few lines about the active scene.
-	{
-		overlay_opts: mu.Options = {.NO_CLOSE, .NO_RESIZE, .NO_SCROLL, .NO_INTERACT}
-		if mu.window(
-			ctx,
-			scene_names[current_scene],
-			{frame_w / 2 - 220, 10, 440, 118},
-			overlay_opts,
-		) {
-			mu.layout_row(ctx, {-1})
-			line_start := 0
-			desc := scene_descriptions[current_scene]
-			for ch, i in desc {
-				if ch == '\n' {
-					mu.text(ctx, desc[line_start:i])
-					line_start = i + 1
+	active_title := len(sm.scenes) > 0 ? sm.scenes[sm.current].title : ""
+
+	im.TextDisabled("scenes")
+	for f in ed.files {
+		if !strings.has_prefix(f, "scenes/") do continue
+		rel := f[len("scenes/"):]
+		slash := strings.index(rel, "/")
+		if slash < 0 do continue
+		unit := rel[:slash]
+		file := rel[slash + 1:]
+		if file == unit {
+			// The scene unit itself (entry file <unit>/<unit>).
+			if im.Selectable(strings_to_c(unit), unit == active_title, {}) {
+				for &s, i in sm.scenes {
+					if s.title == unit {
+						request = i
+						break
+					}
 				}
 			}
-			mu.text(ctx, desc[line_start:])
+		} else {
+			// Scene-owned module: indented under its unit; opens in the
+			// editor.
+			if im.Selectable(strings_to_c(fmt.tprintf("  %s", file)), false, {}) {
+				ied_load_named(ed, f)
+				ed.open = true
+			}
 		}
 	}
-	mu.end(ctx)
-	ui.captures_mouse = ctx.hover_root != nil || ctx.focus_id != 0
+
+	im.Spacing()
+	im.TextDisabled("shared")
+	for f in ed.files {
+		if strings.has_prefix(f, "scenes/") do continue
+		if im.Selectable(strings_to_c(f), false, {}) {
+			ied_load_named(ed, f)
+			ed.open = true // surface the floating editor on the file
+		}
+	}
+	return request
+}
+
+// Builds the widgets. Returns a scene index when a scene was selected.
+// Scenes are the runtime-discovered .slang files (see scene_runtime.odin);
+// the active scene's annotated params ([UiSlider] etc.) appear as widgets
+// automatically.
+ui_build :: proc(
+	ui: ^Ui,
+	sm: ^SceneManager,
+	window: ^sdl.Window,
+	ied: ^ImGuiEditor,
+	ing: ^NodeGraph,
+	frame_w, frame_h: i32,
+) -> int {
+	ui.scene_request = ui_toolbar(ui, sm, window, ied)
+	ui.export_request = .NONE
+	io := im.GetIO()
+	ui.captures_mouse = io.WantCaptureMouse
+
+	if ui.params.grid && !ui.params.view3d {
+		ui_draw_grid(ui, frame_w, frame_h)
+	}
+	if !ui.open do return ui.scene_request
+
+	ui_activity_strip(ui, ied)
+	if !ui.panel_open do return ui.scene_request
+
+	im.SetNextWindowPos({STRIP_W, TITLEBAR_H}, .Always)
+	im.SetNextWindowSize({ui_panel_width(ui.mode, io.DisplaySize.x), io.DisplaySize.y - TITLEBAR_H}, .Always)
+	flags := im.WindowFlags {
+		.NoTitleBar,
+		.NoResize,
+		.NoMove,
+		.NoCollapse,
+		.NoSavedSettings,
+	}
+	im.PushStyleVar(.WindowRounding, 0) // docked chrome is square
+	if im.Begin("##side_panel", nil, flags) {
+		switch ui.mode {
+		case .CONTROLS:
+			ui_controls_panel(ui, sm)
+		case .FILES:
+			if r := ui_files_panel(ui, sm, ied); r >= 0 {
+				ui.scene_request = r
+			}
+		case .GRAPH:
+			ing_panel(ing, ied, sm.scenes[sm.current].title)
+		}
+	}
+	im.End()
+	im.PopStyleVar()
 	return ui.scene_request
 }
 
-// Converts microui draw commands to vertex segments split by clip rect.
-ui_build_geometry :: proc(ui: ^Ui, frame_width, frame_height: i32) {
-	clear(&ui.verts)
-	clear(&ui.segments)
+// Normalized graph overlay: both axes are always [0,1], independent of
+// window size or aspect ratio. Origin is bottom-left (GLSL convention).
+// Drawn on ImGui's background draw list: over the scene, behind all windows.
+GRID_DIVISIONS :: 10     // minor line every 0.1
+GRID_MAJOR_EVERY :: 5    // dark line every 0.5
+GRID_LABEL_EVERY :: 2    // label every 0.2
 
-	scale := ui.scale
-	white := mu.default_atlas[mu.DEFAULT_ATLAS_WHITE]
-	white_uv := [2]f32 {
-		(f32(white.x) + f32(white.w) * 0.5) / mu.DEFAULT_ATLAS_WIDTH,
-		(f32(white.y) + f32(white.h) * 0.5) / mu.DEFAULT_ATLAS_HEIGHT,
-	}
+ui_draw_grid :: proc(ui: ^Ui, frame_w, frame_h: i32) {
+	dl := im.GetBackgroundDrawList()
+	w := f32(frame_w)
+	h := f32(frame_h)
 
-	current_clip := sdl.Rect{0, 0, frame_width, frame_height}
-	segment_first: u32 = 0
+	minor := im.GetColorU32Vec4({0, 0, 0, 0.09})
+	major := im.GetColorU32Vec4({0, 0, 0, 0.26})
+	axis := im.GetColorU32Vec4({0, 0, 0, 0.65})
+	text_col := im.GetColorU32Vec4({0, 0, 0, 0.83})
 
-	push_quad :: proc(ui: ^Ui, x, y, w, h: f32, uv: mu.Rect, color: mu.Color, solid_uv: [2]f32) {
-		s := ui.scale
-		c := [4]f32{f32(color.r), f32(color.g), f32(color.b), f32(color.a)} / 255.0
-		u0 := f32(uv.x) / mu.DEFAULT_ATLAS_WIDTH
-		v0 := f32(uv.y) / mu.DEFAULT_ATLAS_HEIGHT
-		u1 := (f32(uv.x) + f32(uv.w)) / mu.DEFAULT_ATLAS_WIDTH
-		v1 := (f32(uv.y) + f32(uv.h)) / mu.DEFAULT_ATLAS_HEIGHT
-		if uv.w == 0 {
-			u0, v0, u1, v1 = solid_uv.x, solid_uv.y, solid_uv.x, solid_uv.y
+	// Vertical: normalized X grows left -> right.
+	for k in 0 ..= GRID_DIVISIONS {
+		x := f32(k) / GRID_DIVISIONS * w
+		col := minor
+		if k == 0 || k == GRID_DIVISIONS {
+			col = axis
+		} else if k % GRID_MAJOR_EVERY == 0 {
+			col = major
 		}
-		p0 := UiVertex{{x * s, y * s}, {u0, v0}, c}
-		p1 := UiVertex{{(x + w) * s, y * s}, {u1, v0}, c}
-		p2 := UiVertex{{x * s, (y + h) * s}, {u0, v1}, c}
-		p3 := UiVertex{{(x + w) * s, (y + h) * s}, {u1, v1}, c}
-		append(&ui.verts, p0, p1, p2, p2, p1, p3)
+		im.DrawList_AddLine(dl, {min(x, w - 1), 0}, {min(x, w - 1), h}, col)
+	}
+	// Horizontal: screen Y grows down, normalized Y grows up.
+	for k in 0 ..= GRID_DIVISIONS {
+		y := h - f32(k) / GRID_DIVISIONS * h
+		col := minor
+		if k == 0 || k == GRID_DIVISIONS {
+			col = axis
+		} else if k % GRID_MAJOR_EVERY == 0 {
+			col = major
+		}
+		py := clamp(y, 0, h - 1)
+		im.DrawList_AddLine(dl, {0, py}, {w, py}, col)
 	}
 
-	cmd: ^mu.Command
-	for mu.next_command(&ui.ctx, &cmd) {
-		#partial switch c in cmd.variant {
-		case ^mu.Command_Clip:
-			// Close the current segment and start a new one.
-			if int(segment_first) < len(ui.verts) {
-				append(
-					&ui.segments,
-					UiSegment{segment_first, u32(len(ui.verts)) - segment_first, current_clip},
-				)
-			}
-			current_clip = {
-				i32(f32(c.rect.x) * scale),
-				i32(f32(c.rect.y) * scale),
-				i32(f32(c.rect.w) * scale),
-				i32(f32(c.rect.h) * scale),
-			}
-			segment_first = u32(len(ui.verts))
-		case ^mu.Command_Rect:
-			push_quad(
-				ui,
-				f32(c.rect.x), f32(c.rect.y), f32(c.rect.w), f32(c.rect.h),
-				{},
-				c.color,
-				white_uv,
-			)
-		case ^mu.Command_Text:
-			x := f32(c.pos.x)
-			y := f32(c.pos.y)
-			for ch in c.str {
-				// The default font covers ASCII only; non-ASCII (UTF-8
-				// accents) would index past the atlas.
-				glyph := ch if ch <= 126 else '?'
-				r := mu.default_atlas[mu.DEFAULT_ATLAS_FONT + int(glyph)]
-				push_quad(ui, x, y, f32(r.w), f32(r.h), r, c.color, white_uv)
-				x += f32(r.w)
-			}
-		case ^mu.Command_Icon:
-			r := mu.default_atlas[int(c.id)]
-			push_quad(
-				ui,
-				f32(c.rect.x), f32(c.rect.y), f32(c.rect.w), f32(c.rect.h),
-				r,
-				c.color,
-				white_uv,
-			)
-		}
+	// Labels: X just above the bottom edge, Y just right of the left edge,
+	// a single 0 at the origin.
+	for k in 0 ..= GRID_DIVISIONS {
+		if k % GRID_LABEL_EVERY != 0 do continue
+		v := f32(k) / GRID_DIVISIONS
+		x := clamp(v * w + 3, 3, w - 18)
+		im.DrawList_AddText(dl, {x, h - 15}, text_col, fmt.ctprintf("%.1f", v))
 	}
-	if int(segment_first) < len(ui.verts) {
-		append(&ui.segments, UiSegment{segment_first, u32(len(ui.verts)) - segment_first, current_clip})
+	for k := GRID_LABEL_EVERY; k <= GRID_DIVISIONS; k += GRID_LABEL_EVERY {
+		v := f32(k) / GRID_DIVISIONS
+		y := clamp(h - v * h - 14, 2, h - 16)
+		im.DrawList_AddText(dl, {4, y}, text_col, fmt.ctprintf("%.1f", v))
 	}
 }
 
-// Uploads this frame's geometry. Call before the UI render pass.
-ui_upload :: proc(ui: ^Ui, gpu: ^sdl.GPUDevice, cmd: ^sdl.GPUCommandBuffer) {
-	if len(ui.verts) == 0 do return
-	assert(len(ui.verts) <= UI_VERTEX_CAPACITY, "ui vertex capacity exceeded")
-	size := u32(len(ui.verts) * size_of(UiVertex))
-	ptr := sdl.MapGPUTransferBuffer(gpu, ui.transfer, true)
-	mem.copy(ptr, raw_data(ui.verts), int(size))
-	sdl.UnmapGPUTransferBuffer(gpu, ui.transfer)
-	copy_pass := sdl.BeginGPUCopyPass(cmd)
-	sdl.UploadToGPUBuffer(
-		copy_pass,
-		{transfer_buffer = ui.transfer, offset = 0},
-		{buffer = ui.vertex_buffer, offset = 0, size = size},
-		true,
-	)
-	sdl.EndGPUCopyPass(copy_pass)
-}
-
-// Draws the overlay on top of the scene. Own render pass with .LOAD.
-ui_draw :: proc(
-	ui: ^Ui,
-	gpu: ^sdl.GPUDevice,
-	cmd: ^sdl.GPUCommandBuffer,
-	swapchain_texture: ^sdl.GPUTexture,
-	width, height: i32,
-) {
-	if len(ui.segments) == 0 do return
-
-	color_target := sdl.GPUColorTargetInfo {
-		texture  = swapchain_texture,
-		load_op  = .LOAD,
-		store_op = .STORE,
-	}
-	render_pass := sdl.BeginGPURenderPass(cmd, &color_target, 1, nil)
-	sdl.BindGPUGraphicsPipeline(render_pass, ui.pipeline)
-	sdl.BindGPUVertexBuffers(
-		render_pass,
-		0,
-		&(sdl.GPUBufferBinding{buffer = ui.vertex_buffer, offset = 0}),
-		1,
-	)
-	sdl.BindGPUFragmentSamplers(
-		render_pass,
-		0,
-		&(sdl.GPUTextureSamplerBinding{texture = ui.atlas, sampler = ui.sampler}),
-		1,
-	)
-
-	resolution := shader_glue.UiVertexUniforms {
-		iResolution = {f32(width), f32(height)},
-	}
-	sdl.PushGPUVertexUniformData(
-		cmd,
-		shader_glue.UI_VERTEX_UNIFORMS.location.slot,
-		&resolution,
-		shader_glue.UI_VERTEX_UNIFORMS.size,
-	)
-
-	for segment in ui.segments {
-		sdl.SetGPUScissor(render_pass, segment.clip)
-		sdl.DrawGPUPrimitives(render_pass, segment.count, 1, segment.first, 0)
-	}
-	sdl.EndGPURenderPass(render_pass)
+// cstring view of a Go-style string, in temp allocator (ImGui needs
+// NUL-terminated labels).
+strings_to_c :: proc(s: string) -> cstring {
+	return fmt.ctprintf("%s", s)
 }

@@ -1,30 +1,39 @@
 package main
 
-import goose "../vendor/goose/src"
+import goose "../../goose/src"
 import shader_glue "./generated"
+import im "../vendor/odin-imgui"
+import im_sdl "../vendor/odin-imgui/backends/sdl3"
+import im_sdlgpu "../vendor/odin-imgui/backends/sdlgpu3"
+import "core:c"
 import "core:fmt"
 import "core:math"
 import "core:math/linalg"
+import "base:runtime"
+import "core:mem"
 import "core:os"
+import "core:strings"
 import sdl "vendor:sdl3"
+import stbi "vendor:stb/image"
 
-// Inktober procedural shaders: every prompt is a scene on keys 1-9. Every
-// scene is a COMPUTE shader writing an offscreen texture; a single
-// graphics blit pipeline samples it, and the UI overlay draws on top.
-// Texture generation time is measured per frame with a GPU fence,
-// accumulated, and shown as an average in the UI.
+// shader_explorer: a shader playground. Every .slang file in
+// src/shaders/scenes is a scene (compute or fullscreen graphics pass,
+// discovered and built at runtime — see scene_runtime.odin). Scenes
+// render into an offscreen texture; a single blit pipeline samples it
+// and the UI overlay draws on top. Generation time is measured per
+// frame with a GPU fence and shown as an average in the UI.
 //
-// Built with -define:HOT_RELOAD:true (`make run` / `make debug`) the glue
-// loads shader code from disk per call and src/hotreload.odin swaps
-// pipelines on .slang edits.
+// Built with -define:HOT_RELOAD:true (`make run` / `make debug`) the
+// infra glue loads shader code from disk per call.
 
 HOT_RELOAD :: #config(HOT_RELOAD, false)
 
-Scene :: struct {
-	title:    string,
-	pipeline: ^sdl.GPUComputePipeline,
-	glue:     proc() -> goose.ComputeParameters,
-}
+// The app font (JetBrains Mono), kept so the code editor can push its own
+// size independently of the UI font size.
+app_font: ^im.Font
+
+// Scenes are discovered and built at runtime from src/shaders/scenes
+// (see scene_runtime.odin); only infra shaders use the compiled glue.
 
 create_shader :: proc(
 	gpu: ^sdl.GPUDevice,
@@ -57,19 +66,19 @@ link_pipeline :: proc(
 	vertex_shader, fragment_shader: ^sdl.GPUShader,
 ) -> ^sdl.GPUGraphicsPipeline {
 	pipeline := sdl.CreateGPUGraphicsPipeline(
-		gpu,
-		{
-			vertex_shader = vertex_shader,
-			fragment_shader = fragment_shader,
-			primitive_type = .TRIANGLELIST,
-			// No vertex_input_state: positions come from SV_VertexID.
-			target_info = {
-				num_color_targets = 1,
-				color_target_descriptions = &(sdl.GPUColorTargetDescription {
-						format = sdl.GetGPUSwapchainTextureFormat(gpu, window),
-					}),
-			},
+	gpu,
+	{
+		vertex_shader = vertex_shader,
+		fragment_shader = fragment_shader,
+		primitive_type = .TRIANGLELIST,
+		// No vertex_input_state: positions come from SV_VertexID.
+		target_info = {
+			num_color_targets = 1,
+			color_target_descriptions = &(sdl.GPUColorTargetDescription {
+					format = sdl.GetGPUSwapchainTextureFormat(gpu, window),
+				}),
 		},
+	},
 	)
 	if pipeline == nil {
 		fmt.eprintln("failed to link graphics pipeline")
@@ -100,44 +109,120 @@ create_pipeline :: proc(
 	return pipeline
 }
 
-create_compute_pipeline :: proc(
-	gpu: ^sdl.GPUDevice,
-	glue_proc: proc() -> goose.ComputeParameters,
-) -> ^sdl.GPUComputePipeline {
-	parameters := glue_proc()
-	defer when HOT_RELOAD {
-		if parameters.code.blob.size > 0 {
-			delete(parameters.code.blob.data[:parameters.code.blob.size])
-		}
+// Loads an image file (stb_image) into a GPU texture with .SAMPLER usage.
+load_texture :: proc(gpu: ^sdl.GPUDevice, path: string) -> ^sdl.GPUTexture {
+	file_data, read_err := os.read_entire_file(path, context.temp_allocator)
+	if read_err != nil {
+		fmt.eprintfln("failed to read %s: %v", path, read_err)
+		return nil
 	}
-	resources := parameters.resources
-	pipeline := sdl.CreateGPUComputePipeline(
+	w, h, ch: c.int
+	pixels := stbi.load_from_memory(
+		raw_data(file_data),
+		c.int(len(file_data)),
+		&w,
+		&h,
+		&ch,
+		4, // force RGBA8
+	)
+	if pixels == nil {
+		fmt.eprintfln("failed to decode %s: %s", path, stbi.failure_reason())
+		return nil
+	}
+	defer stbi.image_free(pixels)
+
+	tex := sdl.CreateGPUTexture(
 		gpu,
 		{
-			code = parameters.code.blob.data,
-			code_size = parameters.code.blob.size,
-			entrypoint = parameters.code.entrypoint,
-			format = parameters.code.format == .MetalSource ? {.MSL} : {.SPIRV},
-			num_samplers = resources.samplers,
-			num_readonly_storage_textures = resources.readonly_storage_textures,
-			num_readonly_storage_buffers = resources.readonly_storage_buffers,
-			num_readwrite_storage_textures = resources.readwrite_storage_textures,
-			num_readwrite_storage_buffers = resources.readwrite_storage_buffers,
-			num_uniform_buffers = resources.uniform_buffers,
-			threadcount_x = parameters.thread_count.x,
-			threadcount_y = parameters.thread_count.y,
-			threadcount_z = parameters.thread_count.z,
+			type = .D2,
+			format = .R8G8B8A8_UNORM,
+			usage = {.SAMPLER},
+			width = u32(w),
+			height = u32(h),
+			layer_count_or_depth = 1,
+			num_levels = 1,
 		},
 	)
-	if pipeline == nil {
-		fmt.eprintfln("failed to create compute pipeline %s", parameters.code.name)
+	if tex == nil do return nil
+
+	size := u32(w) * u32(h) * 4
+	upload := sdl.CreateGPUTransferBuffer(gpu, {usage = .UPLOAD, size = size})
+	if upload == nil {
+		sdl.ReleaseGPUTexture(gpu, tex)
+		return nil
 	}
-	return pipeline
+	defer sdl.ReleaseGPUTransferBuffer(gpu, upload)
+	ptr := sdl.MapGPUTransferBuffer(gpu, upload, false)
+	mem.copy(ptr, pixels, int(size))
+	sdl.UnmapGPUTransferBuffer(gpu, upload)
+
+	cmd := sdl.AcquireGPUCommandBuffer(gpu)
+	copy_pass := sdl.BeginGPUCopyPass(cmd)
+	sdl.UploadToGPUTexture(
+		copy_pass,
+		{transfer_buffer = upload, offset = 0, pixels_per_row = u32(w), rows_per_layer = u32(h)},
+		{texture = tex, w = u32(w), h = u32(h), d = 1},
+		false,
+	)
+	sdl.EndGPUCopyPass(copy_pass)
+	ok := sdl.SubmitGPUCommandBuffer(cmd); assert(ok)
+	return tex
+}
+
+
+// Hit test for the borderless window: SDL asks how each region behaves.
+// Edge strips resize, empty title-bar space drags the window (widget rects
+// registered by ui_toolbar stay .NORMAL so ImGui keeps their clicks), the
+// rest is regular scene/UI space.
+RESIZE_BORDER :: 8
+
+window_hit_test :: proc "c" (win: ^sdl.Window, area: ^sdl.Point, data: rawptr) -> sdl.HitTestResult {
+	context = runtime.default_context()
+	w, h: i32
+	sdl.GetWindowSize(win, &w, &h)
+	x, y := f32(area.x), f32(area.y)
+	maximized := .MAXIMIZED in sdl.GetWindowFlags(win)
+
+	if !maximized {
+		border := f32(RESIZE_BORDER)
+		left := x < border
+		right := x >= f32(w) - border
+		top := y < border
+		bottom := y >= f32(h) - border
+		switch {
+		case top && left:
+			return .RESIZE_TOPLEFT
+		case top && right:
+			return .RESIZE_TOPRIGHT
+		case bottom && left:
+			return .RESIZE_BOTTOMLEFT
+		case bottom && right:
+			return .RESIZE_BOTTOMRIGHT
+		case top:
+			return .RESIZE_TOP
+		case bottom:
+			return .RESIZE_BOTTOM
+		case left:
+			return .RESIZE_LEFT
+		case right:
+			return .RESIZE_RIGHT
+		}
+	}
+
+	if y < TITLEBAR_H && !titlebar_point_hot(x, y) {
+		// Zoom lives on the green traffic light; no double-click here.
+		// SDL may query the hit test more than once per press (drag
+		// decision + generic video layer), so counting presses in this
+		// callback cannot tell a double-click from a single one.
+		return .NORMAL if maximized else .DRAGGABLE
+	}
+	return .NORMAL
 }
 
 main :: proc() {
 	once := false
 	start_scene := 0
+	start_graph := false
 	force3d := false
 	shot_path := ""
 	force_color := false
@@ -148,6 +233,10 @@ main :: proc() {
 			once = true
 		case "--3d":
 			force3d = true
+		case "--ied-debug":
+			ied_debug_clicks = true
+		case "--ied-test":
+			ied_selftest = true
 		case "--color":
 			force_color = true
 		case "--shot":
@@ -164,36 +253,37 @@ main :: proc() {
 					start_scene = int(n)
 				}
 			}
+		case "--graph":
+			// Start with the sidebar on the node graph panel (CLI parity
+			// with F2).
+			start_graph = true
+		case "--graph-test":
+			// --graph plus two created passes on the starting scene.
+			start_graph = true
+			ing_selftest = true
 		}
 	}
 
 	ok := sdl.Init({.VIDEO}); assert(ok)
-	window := sdl.CreateWindow("Inktober — procedural shaders", 800, 600, {})
+	// Borderless: the ImGui title bar (ui.odin) is the window chrome. The
+	// hit test keeps native drag/resize working without a native frame.
+	window := sdl.CreateWindow("shader_explorer", 800, 600, {.RESIZABLE, .BORDERLESS})
 	assert(window != nil)
+	ok = sdl.SetWindowHitTest(window, window_hit_test, nil); assert(ok)
+	ok = sdl.SetWindowMinimumSize(window, 480, 320); assert(ok)
+	// Rounded corners (macOS, via the native NSWindow layer).
+	window_round_corners(window)
 	gpu := sdl.CreateGPUDevice({.SPIRV, .MSL, .DXBC, .DXIL}, true, nil)
 	assert(gpu != nil)
 	ok = sdl.ClaimWindowForGPUDevice(gpu, window); assert(ok)
 
-	// Every scene is named after its compute shader file; one per inktober
-	// prompt. Add the shader to src/shaders, goose.json, and this list.
-	scenes := [1]Scene {
-		{title = "apple", glue = shader_glue.apple_compute},
-	}
-	for &scene in scenes {
-		scene.pipeline = create_compute_pipeline(gpu, scene.glue)
-		assert(scene.pipeline != nil)
-	}
-
-	scene_names: [1]string
-	for scene, i in scenes {
-		scene_names[i] = scene.title
-	}
-
-	// Overlay descriptions (top-center panel, max 5 lines each): what the
-	// scene shows, what the colors mean, and any controls that affect it.
-	scene_descriptions := [1]string {
-		"Inktober day 1: apple.\nProcedural ink apple on grained paper.\n'color' = shaded red apple instead of black ink.\nSliders drive paper grain and edge wobble.",
-	}
+	// Scenes are discovered in src/shaders/scenes and built at runtime;
+	// adding a .slang file there needs no code change (scene_runtime.odin).
+	scene_mgr: SceneManager
+	scene_rescan(&scene_mgr, gpu)
+	assert(len(scene_mgr.scenes) > 0)
+	if start_scene >= len(scene_mgr.scenes) do start_scene = 0
+	scene_mgr.current = start_scene
 
 	// Blit: the only graphics pipeline besides the UI overlay.
 	blit_pipeline := create_pipeline(
@@ -246,9 +336,86 @@ main :: proc() {
 		},
 	); assert(blit_sampler != nil)
 
-	ui := ui_init(gpu, window)
+	ui := ui_init()
 	if force3d do ui.params.view3d = true
 	if force_color do ui.params.color = true
+
+	// Integrated ImGui shader editor (F1 toggles the panel).
+	im.CHECKVERSION()
+	im.CreateContext()
+	// Coding font for everything (UI + editor): the atlas default is a tiny
+	// bitmap font that hurts readability; JetBrains Mono is OFL-licensed and
+	// vendored. FontDefault switches NewFrame to it.
+	io_fonts := im.GetIO()
+	if jb := im.FontAtlas_AddFontFromFileTTF(io_fonts.Fonts, "vendor/fonts/JetBrainsMono-Regular.ttf", 16, nil, nil); jb != nil {
+		io_fonts.FontDefault = jb
+		app_font = jb
+	}
+	ui_apply_style()
+	im_sdl.InitForSDLGPU(window)
+	imgui_init := im_sdlgpu.DEFAULT_INIT_INFO
+	imgui_init.Device = gpu
+	imgui_init.ColorTargetFormat = sdl.GetGPUSwapchainTextureFormat(gpu, window)
+	assert(im_sdlgpu.Init(&imgui_init))
+	ied := ied_init()
+	ing := ing_init()
+	// The editor self-test drives the component directly; surface its
+	// floating window so the frames (tabs, markers) are visible.
+	if ied_selftest do ied.open = true
+	if start_graph do ui.mode = .GRAPH
+	if ing_selftest {
+		ing.scene = strings.clone(scene_mgr.scenes[scene_mgr.current].title)
+		sg_create_pass(ing, ied, .COMPUTE)
+		sg_create_pass(ing, ied, .GRAPHICS)
+	}
+
+	// Scanned paper backgrounds (assets/), picked in the UI and bound to
+	// the scene's compute pass. Order matches paper_names.
+	paper_names := [2]string{"watercolor", "parchment"}
+	paper_textures: [2]^sdl.GPUTexture
+	paper_paths := [2]string{"assets/watercolor_paper.jpg", "assets/parchment.jpg"}
+	for path, i in paper_paths {
+		paper_textures[i] = load_texture(gpu, path)
+		assert(paper_textures[i] != nil)
+	}
+
+	// Equirectangular skyboxes (assets/skybox/skybox-*.png), a global
+	// option like the paper: scenes sampling skybox_tex get the pick.
+	skybox_names: [dynamic]string
+	skybox_textures: [dynamic]^sdl.GPUTexture
+	if entries, err := os.read_directory_by_path("assets/skybox", 0, context.temp_allocator);
+	   err == nil {
+		for entry in entries {
+			lower := strings.to_lower(entry.name, context.temp_allocator)
+			if !strings.has_suffix(lower, ".png") && !strings.has_suffix(lower, ".jpg") do continue
+			name := entry.name
+			if strings.has_prefix(name, "skybox-") do name = name[len("skybox-"):]
+			dot := strings.last_index(name, ".")
+			if dot > 0 do name = name[:dot]
+			tex := load_texture(gpu, entry.fullpath)
+			assert(tex != nil)
+			append(&skybox_names, strings.clone(name))
+			append(&skybox_textures, tex)
+		}
+	}
+
+	// All models in assets/models (+ generated icosphere fallback) for
+	// model-viewer scenes; picked in the UI "model" group.
+	models := model_load_all(gpu)
+	assert(len(models) > 0 && models[0].vb != nil)
+	model_names: [dynamic]string
+	for &m in models do append(&model_names, m.name)
+	paper_sampler := sdl.CreateGPUSampler(
+		gpu,
+		{
+			min_filter = .LINEAR,
+			mag_filter = .LINEAR,
+			mipmap_mode = .LINEAR,
+			address_mode_u = .CLAMP_TO_EDGE,
+			address_mode_v = .CLAMP_TO_EDGE,
+			address_mode_w = .CLAMP_TO_EDGE,
+		},
+	); assert(paper_sampler != nil)
 
 	// Offscreen texture the compute scenes render into; recreated on resize.
 	scene_tex: ^sdl.GPUTexture
@@ -262,54 +429,104 @@ main :: proc() {
 	pitch: f32 = 0.55
 	dist: f32 = 2.6
 
+	// Persistent orbit for model-viewer scenes in mouse rotation mode.
+	model_orbiting := false
+	model_orbit_anchor: [2]f32
+	model_yaw: f32
+	model_pitch: f32 = 0.55
+	previous_interaction := ui.params.interaction
+
 	// Texture generation timing: fence per frame, EMA of submit→completion.
 	pending_fence: ^sdl.GPUFence
 	fence_t0: u64
 	gen_initialized := false
 
 	set_title :: proc(window: ^sdl.Window, title: string) {
-		ok := sdl.SetWindowTitle(window, fmt.ctprint("Inktober — ", title))
+		ok := sdl.SetWindowTitle(window, fmt.ctprint("shader_explorer — ", title))
 		assert(ok)
 	}
 
-	current := start_scene
-	ui_open := true
-	set_title(window, scenes[current].title)
+	set_title(window, scene_mgr.scenes[scene_mgr.current].title)
 
-	watcher: HotReload
 	app_time: f32
 	prev_ticks := sdl.GetTicks()
 	main_loop: for {
-		hot_reload_poll(&watcher, gpu, scenes[:])
+		scene_poll(&scene_mgr, gpu)
+		if len(scene_mgr.scenes) == 0 do break
+		current := scene_mgr.current
 
 		width, height: i32
 		sdl.GetWindowSizeInPixels(window, &width, &height)
 
+		io := im.GetIO()
+		imgui_mouse := io.WantCaptureMouse
+		imgui_kb := io.WantCaptureKeyboard
+
 		event: sdl.Event
 		for sdl.PollEvent(&event) {
-			ui_handle_event(ui, event)
+			im_sdl.ProcessEvent(&event)
 			#partial switch event.type {
 			case .QUIT:
 				break main_loop
 			case .KEY_DOWN:
+				if event.key.key == sdl.K_LGUI || event.key.key == sdl.K_RGUI {
+					ied_gui_held = true
+				} else if event.key.key == sdl.K_LSHIFT || event.key.key == sdl.K_RSHIFT {
+					ied_shift_held = true
+				}
+				if event.key.key == sdl.K_S && (event.key.mod & sdl.KMOD_GUI) != {} {
+					// Application-wide save: every dirty editor tab.
+					ied_save_all(ied)
+					continue
+				}
+				if event.key.key == sdl.K_B && (event.key.mod & sdl.KMOD_GUI) != {} {
+					// Toggle the whole sidebar (VS Code's Cmd+B).
+					ui.open = !ui.open
+					continue
+				}
 				#partial switch event.key.scancode {
-				case .ESCAPE:
-					break main_loop
-				case .SPACE:
-					ui_open = !ui_open
-					if !ui_open do ui.captures_mouse = false
-				case ._1, ._2, ._3, ._4, ._5, ._6, ._7, ._8, ._9:
-					n := int(event.key.scancode) - int(sdl.Scancode._1)
-					if n < len(scenes) {
-						current = n
-						set_title(window, scenes[current].title)
-						gen_initialized = false
+				case .F1:
+					// The shader editor is a floating window, separate
+					// from the sidebar by design.
+					ied.open = !ied.open
+				case .F2:
+					// Jump to the node graph panel (or back to controls).
+					if ui.mode == .GRAPH {
+						ui.mode = .CONTROLS
+					} else {
+						ui.mode = .GRAPH
+						ui.panel_open = true
 					}
+					ui.open = true
+				case .ESCAPE:
+					if !imgui_kb do break main_loop
+				case .SPACE:
+					if !imgui_kb {
+						// Zen mode: hide the sidebar and the editor. The
+						// title bar stays — it is the window chrome now.
+						ui.open = !ui.open
+						ied.open = ui.open
+					}
+				case ._1, ._2, ._3, ._4, ._5, ._6, ._7, ._8, ._9:
+					if !imgui_kb {
+						n := int(event.key.scancode) - int(sdl.Scancode._1)
+						if n < len(scene_mgr.scenes) {
+							scene_mgr.current = n
+							set_title(window, scene_mgr.scenes[n].title)
+							gen_initialized = false
+						}
+					}
+				}
+			case .KEY_UP:
+				if event.key.key == sdl.K_LGUI || event.key.key == sdl.K_RGUI {
+					ied_gui_held = false
+				} else if event.key.key == sdl.K_LSHIFT || event.key.key == sdl.K_RSHIFT {
+					ied_shift_held = false
 				}
 			}
 
 			// Orbit camera input (3D view only; left-drag rotates, wheel zooms).
-			if ui.params.view3d {
+			if ui.params.view3d && !imgui_mouse {
 				#partial switch event.type {
 				case .MOUSE_BUTTON_DOWN:
 					if event.button.button == sdl.BUTTON_LEFT && !ui.captures_mouse {
@@ -332,26 +549,57 @@ main :: proc() {
 					}
 				}
 			}
+
+			// Model camera input: only active in mouse rotation mode.
+			if !ui.params.view3d &&
+			   !imgui_mouse &&
+			   ui.params.interaction == .MOUSE_ROTATE &&
+			   scene_mgr.scenes[scene_mgr.current].uses_model {
+				#partial switch event.type {
+				case .MOUSE_BUTTON_DOWN:
+					if event.button.button == sdl.BUTTON_LEFT && !ui.captures_mouse {
+						model_orbiting = true
+						model_orbit_anchor = {event.button.x, event.button.y}
+					}
+				case .MOUSE_BUTTON_UP:
+					if event.button.button == sdl.BUTTON_LEFT {
+						model_orbiting = false
+					}
+				case .MOUSE_MOTION:
+					if model_orbiting {
+						model_yaw -= (event.motion.x - model_orbit_anchor.x) * 0.012
+						model_pitch = clamp(
+							model_pitch + (event.motion.y - model_orbit_anchor.y) * 0.012,
+							-1.45,
+							1.45,
+						)
+						model_orbit_anchor = {event.motion.x, event.motion.y}
+					}
+				}
+			}
 		}
 
-		scene_request := -1
-		if ui_open {
-			scene_request = ui_build(
-				ui,
-				current,
-				scene_names[:],
-				scene_descriptions[:],
-				width,
-				height,
-			)
-			if scene_request >= 0 {
-				current = scene_request
-				set_title(window, scenes[current].title)
-				gen_initialized = false
-			}
-		} else {
-			ui.captures_mouse = false
+		// ImGui frame: Controls + editor panel build their widgets here; the
+		// draw data is rendered after the blit pass below.
+		im_sdlgpu.NewFrame()
+		im_sdl.NewFrame()
+		im.NewFrame()
+		scene_request := ui_build(ui, &scene_mgr, window, ied, ing, width, height)
+		// The editor follows the active scene (its tab plus every imported
+		// module) and keeps its background work (LSP sync, diagnostics)
+		// flowing whether or not its window is visible.
+		ied_open_scene(ied, scene_mgr.scenes[scene_mgr.current].title)
+		ied_tick(ied)
+		ied_frame(ied)
+		if ui.quit_requested do break main_loop
+		if scene_request >= 0 {
+			scene_mgr.current = scene_request
+			current = scene_request
+			model_orbiting = false
+			set_title(window, scene_mgr.scenes[scene_request].title)
+			gen_initialized = false
 		}
+		im.Render()
 
 		ticks := sdl.GetTicks()
 		dt := f32(ticks - prev_ticks) / 1000
@@ -360,17 +608,45 @@ main :: proc() {
 			app_time += dt
 		}
 
+		// Enter mouse mode without snapping: continue from the current
+		// autorotate angle, then retain every drag result after release.
+		if previous_interaction != ui.params.interaction {
+			if ui.params.interaction == .MOUSE_ROTATE {
+				model_yaw = app_time * 0.4
+				model_pitch = 0.55
+			}
+			model_orbiting = false
+			previous_interaction = ui.params.interaction
+		}
+
 		win_w, win_h: i32
 		sdl.GetWindowSize(window, &win_w, &win_h)
-		ui.scale = f32(width) / f32(win_w)
+		scale := f32(width) / f32(win_w)
 
-		uniform_block := shader_glue.AppleComputeUniforms {
-			iResolution = {f32(width), f32(height), 1},
-			iTime       = app_time,
-			iFbm        = {ui.params.octaves, ui.params.lacunarity, ui.params.gain, 0},
-			iColorMode  = ui.params.color ? 1 : 0,
-			iManual     = 1,
+		// Mouse in pixel coordinates, y up to match frag_coord; clicks
+		// landing on UI widgets do not count as scene clicks.
+		mx, my: f32
+		buttons := sdl.GetMouseState(&mx, &my)
+		mouse_pos := [2]f32{mx * scale, f32(height) - my * scale}
+		mouse_click := .LEFT in buttons && !ui.captures_mouse
+
+		camera_yaw := app_time * 0.4
+		camera_pitch: f32 = 0.55
+		if ui.params.interaction == .MOUSE_ROTATE {
+			camera_yaw = model_yaw
+			camera_pitch = model_pitch
 		}
+		camera := camera_orbit(camera_yaw, camera_pitch, f32(width) / f32(height))
+
+		scene_write_uniforms(
+			&scene_mgr.scenes[current],
+			{f32(width), f32(height)},
+			app_time,
+			ui.params.color,
+			mouse_pos,
+			mouse_click,
+			&camera,
+		)
 
 		// (Re)create the offscreen texture on resize.
 		if scene_tex == nil || tex_w != width || tex_h != height {
@@ -380,7 +656,7 @@ main :: proc() {
 				{
 					type = .D2,
 					format = .R8G8B8A8_UNORM,
-					usage = {.SAMPLER, .COMPUTE_STORAGE_WRITE},
+					usage = {.SAMPLER, .COMPUTE_STORAGE_WRITE, .COLOR_TARGET},
 					width = u32(width),
 					height = u32(height),
 					layer_count_or_depth = 1,
@@ -415,31 +691,33 @@ main :: proc() {
 				ui.gen_ms = sample
 				gen_initialized = true
 			} else {
-				ui.gen_ms = 0.95*ui.gen_ms + 0.05*sample
+				ui.gen_ms = 0.95 * ui.gen_ms + 0.05 * sample
 			}
 		}
-		fmt.printfln("gen %.3f ms", ui.gen_ms)
+		// fmt.printfln("gen %.3f ms", ui.gen_ms)
 
-		// Compute pass: the scene renders the offscreen texture, timed by fence.
+		// Shared resources for the frame (depth_tex recreates on resize).
+		res := SceneResources {
+			depth_tex       = depth_tex,
+			sampler         = paper_sampler,
+			paper_textures  = paper_textures[:],
+			paper_index     = ui.params.paper,
+			skybox_textures = skybox_textures[:],
+			skybox_index    = ui.params.skybox,
+			model           = &models[min(ui.params.model_index, len(models) - 1)],
+		}
+
+		// The scene renders the offscreen texture, timed by fence.
 		{
-			tex_binding := sdl.GPUStorageTextureReadWriteBinding {
-				texture = scene_tex,
-				cycle   = true,
-			}
-			cmd := sdl.AcquireGPUCommandBuffer(gpu)
-			compute_pass := sdl.BeginGPUComputePass(cmd, &tex_binding, 1, nil, 0)
-			pipeline := scenes[current].pipeline
-			sdl.BindGPUComputePipeline(compute_pass, pipeline)
-			sdl.PushGPUComputeUniformData(
-				cmd,
-				shader_glue.APPLE_COMPUTE_UNIFORMS.location.slot,
-				&uniform_block,
-				shader_glue.APPLE_COMPUTE_UNIFORMS.size,
-			)
-			sdl.DispatchGPUCompute(compute_pass, u32((width + 7) / 8), u32((height + 7) / 8), 1)
-			sdl.EndGPUComputePass(compute_pass)
 			fence_t0 = sdl.GetPerformanceCounter()
-			pending_fence = sdl.SubmitGPUCommandBufferAndAcquireFence(cmd)
+			pending_fence = submit_scene_frame(
+				gpu,
+				&scene_mgr.scenes[current],
+				scene_tex,
+				&res,
+				width,
+				height,
+			)
 			assert(pending_fence != nil)
 		}
 
@@ -447,6 +725,25 @@ main :: proc() {
 		if shot_path != "" {
 			save_texture_png(gpu, scene_tex, width, height, shot_path)
 			break main_loop
+		}
+
+		// UI export buttons: scene_tex now holds the current frame.
+		#partial switch ui.export_request {
+		case .PNG:
+			path := export_path(scene_mgr.scenes[current].title, "png")
+			if save_texture_png(gpu, scene_tex, width, height, path) {
+				fmt.printfln("saved %s", path)
+			}
+		case .GIF:
+			export_gif(
+				gpu,
+				&scene_mgr.scenes[current],
+				scene_tex,
+				&res,
+				width,
+				height,
+				ui.params.color,
+			)
 		}
 
 		// Graphics passes: blit the texture, then the UI overlay.
@@ -484,7 +781,11 @@ main :: proc() {
 						origin.y + dist * sp,
 						origin.z + dist * cp * math.cos(yaw),
 					}
-					to_origin := [3]f32{origin.x - camPos.x, origin.y - camPos.y, origin.z - camPos.z}
+					to_origin := [3]f32 {
+						origin.x - camPos.x,
+						origin.y - camPos.y,
+						origin.z - camPos.z,
+					}
 					fwd := linalg.normalize(to_origin)
 					right := linalg.normalize(linalg.cross(fwd, [3]f32{0, 1, 0}))
 					up := linalg.cross(right, fwd)
@@ -517,9 +818,9 @@ main :: proc() {
 						render_pass,
 						0,
 						&(sdl.GPUTextureSamplerBinding {
-							texture = scene_tex,
-							sampler = blit_sampler,
-						}),
+								texture = scene_tex,
+								sampler = blit_sampler,
+							}),
 						1,
 					)
 					sdl.DrawGPUPrimitives(render_pass, 6 * 256 * 256, 1, 0, 0)
@@ -531,19 +832,27 @@ main :: proc() {
 						render_pass,
 						0,
 						&(sdl.GPUTextureSamplerBinding {
-							texture = scene_tex,
-							sampler = blit_sampler,
-						}),
+								texture = scene_tex,
+								sampler = blit_sampler,
+							}),
 						1,
 					)
 					sdl.DrawGPUPrimitives(render_pass, 3, 1, 0, 0)
 					sdl.EndGPURenderPass(render_pass)
 				}
 
-				if ui_open {
-					ui_build_geometry(ui, width, height)
-					ui_upload(ui, gpu, cmd)
-					ui_draw(ui, gpu, cmd, swapchain_texture, width, height)
+				// ImGui pass: Controls + editor panel on top of everything.
+				draw_data := im.GetDrawData()
+				if draw_data.DisplaySize.x > 0 && draw_data.DisplaySize.y > 0 {
+					im_sdlgpu.PrepareDrawData(draw_data, cmd)
+					imgui_target := sdl.GPUColorTargetInfo {
+						texture  = swapchain_texture,
+						load_op  = .LOAD,
+						store_op = .STORE,
+					}
+					imgui_pass := sdl.BeginGPURenderPass(cmd, &imgui_target, 1, nil)
+					im_sdlgpu.RenderDrawData(draw_data, cmd, imgui_pass)
+					sdl.EndGPURenderPass(imgui_pass)
 				}
 			}
 		}
@@ -551,5 +860,9 @@ main :: proc() {
 		if once do break main_loop
 	}
 
+	ite_destroy(ied.handle)
+	im_sdlgpu.Shutdown()
+	im_sdl.Shutdown()
+	im.DestroyContext()
 	fmt.println("Exiting")
 }
