@@ -4,6 +4,10 @@ main_debug
 *.dSYM/
 output.ppm
 output.qoi
+exports/
+src/generated/scenes/
 odin_bin
 *.bin
-vendor/goose/goose-build
+.impeccable
+DESIGN.md
+PRODUCT.md
