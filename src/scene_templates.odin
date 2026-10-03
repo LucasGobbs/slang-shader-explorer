@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:log"
 import "core:os"
 import "core:strings"
 
@@ -112,15 +113,15 @@ scene_create :: proc(kind: SceneTemplateKind) -> (title: string, ok: bool) {
 		dir := fmt.tprintf("%s/%s", SCENES_DIR, name)
 		if os.exists(dir) do continue
 		if os.make_directory(dir) != nil {
-			fmt.eprintfln("new scene: failed to create %s", dir)
+			log.errorf("new scene: failed to create %s", dir)
 			return "", false
 		}
 		path := fmt.tprintf("%s/%s.slang", dir, name)
 		if os.write_entire_file(path, transmute([]u8)source) != nil {
-			fmt.eprintfln("new scene: failed to write %s", path)
+			log.errorf("new scene: failed to write %s", path)
 			return "", false
 		}
-		fmt.printfln("new scene: created %s", path)
+		log.infof("new scene: created %s", path)
 		return strings.clone(name), true
 	}
 	return "", false

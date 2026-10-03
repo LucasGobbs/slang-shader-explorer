@@ -7,6 +7,7 @@ package main
 
 import "core:encoding/json"
 import "core:fmt"
+import "core:log"
 import "core:os"
 import "core:strings"
 import "core:time"
@@ -130,7 +131,7 @@ lsp_route_message :: proc(lsp: ^Lsp, msg: string) {
 		lsp.pending[int(id)] = strings.clone(msg)
 		return
 	}
-	fmt.printfln("[lsp] notification: %s (%d bytes)", e.method, len(msg))
+	log.debugf("[lsp] notification: %s (%d bytes)", e.method, len(msg))
 	if e.method == "textDocument/publishDiagnostics" {
 		lsp_handle_diagnostics(lsp, e.params)
 	}
@@ -224,7 +225,7 @@ lsp_start :: proc() -> ^Lsp {
 	in_r, in_w, in_err := os.pipe()
 	out_r, out_w, out_err := os.pipe()
 	if in_err != nil || out_err != nil {
-		fmt.eprintfln("lsp: pipe failed: %v %v", in_err, out_err)
+		log.errorf("lsp: pipe failed: %v %v", in_err, out_err)
 		return nil
 	}
 	cwd, _ := os.get_working_directory(context.temp_allocator)
@@ -237,7 +238,7 @@ lsp_start :: proc() -> ^Lsp {
 		},
 	)
 	if start_err != nil {
-		fmt.eprintfln("lsp: failed to start slangd: %v", start_err)
+		log.errorf("lsp: failed to start slangd: %v", start_err)
 		return nil
 	}
 	lsp.process = handle
@@ -252,17 +253,17 @@ lsp_start :: proc() -> ^Lsp {
 	)
 	id, ok := lsp_request(lsp, "initialize", init_params)
 	if !ok {
-		fmt.eprintln("lsp: initialize write failed")
+		log.error("lsp: initialize write failed")
 		return nil
 	}
 	init_resp, got := lsp_await_response(lsp, id)
 	if !got {
-		fmt.eprintln("lsp: initialize response timeout")
+		log.error("lsp: initialize response timeout")
 		return nil
 	}
-	fmt.printfln("[lsp] server capabilities: %s", init_resp[:min(400, len(init_resp))])
+	log.infof("[lsp] server capabilities: %s", init_resp[:min(400, len(init_resp))])
 	lsp_notify(lsp, "initialized", `{}`)
-	fmt.println("[lsp] slangd initialized")
+	log.info("[lsp] slangd initialized")
 	return lsp
 }
 
