@@ -13,6 +13,10 @@
     {
       "name": "blit3d",
       "source": "src/shaders/blit3d.slang"
+    },
+    {
+      "name": "develop",
+      "source": "src/shaders/develop.slang"
     }
   ]
 }
