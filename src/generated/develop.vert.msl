@@ -1,0 +1,52 @@
+#include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
+using namespace metal;
+
+#line 3343 "core.meta.slang"
+struct vertMain_Result_0
+{
+    float4 pos_0 [[position]];
+    float2 uv_0 [[user(TEXCOORD)]];
+};
+
+
+#line 25 "src/shaders/develop.slang"
+struct VsOut_0
+{
+    float4 pos_1;
+    float2 uv_1;
+};
+
+
+#line 25
+[[vertex]] vertMain_Result_0 vertMain(uint vertexIndex_0 [[vertex_id]])
+{
+
+#line 34
+    float _S1 = float((vertexIndex_0 << 1U) & 2U);
+
+#line 34
+    float _S2 = float(vertexIndex_0 & 2U);
+
+#line 32
+    thread VsOut_0 o_0;
+
+
+    (&o_0)->pos_1 = float4(float2(_S1, _S2) * float2(2.0f)  - float2(1.0f) , 0.0f, 1.0f);
+
+    (&o_0)->uv_1 = float2(_S1, 1.0f - _S2);
+
+#line 37
+    thread vertMain_Result_0 _S3;
+
+#line 37
+    (&_S3)->pos_0 = o_0.pos_1;
+
+#line 37
+    (&_S3)->uv_0 = o_0.uv_1;
+
+#line 37
+    return _S3;
+}
+

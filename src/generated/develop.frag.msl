@@ -1,0 +1,126 @@
+#include <metal_stdlib>
+#include <metal_math>
+#include <metal_texture>
+using namespace metal;
+
+#line 49 "src/shaders/develop.slang"
+float bayer4_0(float2 p_0)
+{
+
+#line 50
+    int2 q_0 = int2(p_0) & (int2(int(3)) );
+
+    array<float, int(16)> m_0 = { { 0.0f, 8.0f, 2.0f, 10.0f, 12.0f, 4.0f, 14.0f, 6.0f, 3.0f, 11.0f, 1.0f, 9.0f, 15.0f, 7.0f, 13.0f, 5.0f } };
+    return m_0[q_0.y * int(4) + q_0.x] / 16.0f;
+}
+
+
+#line 41
+float hash21_0(float2 p_1)
+{
+
+#line 42
+    float2 _S1 = fract(p_1 * float2(123.339996337890625f, 456.209991455078125f));
+    float2 _S2 = _S1 + float2(dot(_S1, _S1 + float2(45.31999969482421875f) )) ;
+    return fract(_S2.x * _S2.y);
+}
+
+
+#line 90 "core"
+struct pixelOutput_0
+{
+    float4 output_0 [[color(0)]];
+};
+
+
+#line 90
+struct pixelInput_0
+{
+    float2 uv_0 [[user(TEXCOORD)]];
+};
+
+
+#line 14 "src/shaders/develop.slang"
+struct DevelopUniforms_0
+{
+    float t_0;
+    float time_0;
+    float2 res_0;
+    int variant_0;
+    float2 origin_0;
+};
+
+struct KernelContext_0
+{
+    texture2d<float, access::sample> tex_0;
+    sampler tex_sampler_0;
+    DevelopUniforms_0 constant* u_0;
+};
+
+
+#line 57
+[[fragment]] pixelOutput_0 pixelMain(pixelInput_0 _S3 [[stage_in]], float4 pos_0 [[position]], texture2d<float, access::sample> tex_1 [[texture(0)]], sampler tex_sampler_1 [[sampler(0)]], DevelopUniforms_0 constant* u_1 [[buffer(0)]])
+{
+
+#line 57
+    thread KernelContext_0 kernelContext_0;
+
+#line 57
+    (&kernelContext_0)->tex_0 = tex_1;
+
+#line 57
+    (&kernelContext_0)->tex_sampler_0 = tex_sampler_1;
+
+#line 57
+    (&kernelContext_0)->u_0 = u_1;
+    float3 scene_0 = ((tex_1).sample((tex_sampler_1), (_S3.uv_0))).xyz;
+    float t_1 = saturate(u_1->t_0);
+    float3 amber_0 = float3(0.9100000262260437f, 0.6600000262260437f, 0.34000000357627869f);
+
+
+    if((u_1->variant_0) == int(1))
+    {
+
+
+        float emerge_0 = smoothstep(t_1 - 0.07999999821186066f, t_1 + 0.07999999821186066f, bayer4_0(_S3.uv_0 * (&kernelContext_0)->u_0->res_0));
+
+#line 67
+        pixelOutput_0 _S4 = { float4(scene_0 * float3(emerge_0)  + amber_0 * float3((0.34999999403953552f + 0.64999997615814209f * (1.0f - t_1)))  * float3(0.55000001192092896f)  * float3((1.0f - emerge_0)) , 1.0f) };
+
+
+        return _S4;
+    }
+
+    if((u_1->variant_0) == int(2))
+    {
+        float aspect_0 = (&kernelContext_0)->u_0->res_0.x / (&kernelContext_0)->u_0->res_0.y;
+        thread float2 d_0 = _S3.uv_0 - (&kernelContext_0)->u_0->origin_0;
+        d_0.x = d_0.x * aspect_0;
+        float radius_0 = t_1 * 1.5f;
+        float dist_0 = length(d_0);
+        float emerge_1 = 1.0f - smoothstep(radius_0 - 0.11999999731779099f, radius_0, dist_0);
+        float _S5 = 1.0f - t_1;
+
+#line 81
+        pixelOutput_0 _S6 = { float4(scene_0 * float3(emerge_1)  + amber_0 * float3((1.0f - emerge_1))  * float3(0.44999998807907104f)  * float3(_S5)  + amber_0 * float3((smoothstep(0.01999999955296516f, 0.0f, abs(dist_0 - radius_0 + 0.05999999865889549f)) * _S5))  * float3(0.80000001192092896f) , 1.0f) };
+
+        return _S6;
+    }
+
+#line 92
+    float thresh_0 = 1.0f - t_1 * 1.22000002861022949f;
+    float emerge_2 = smoothstep(thresh_0 - 0.2199999988079071f, thresh_0 + 0.2199999988079071f, dot(scene_0, float3(0.29899999499320984f, 0.58700001239776611f, 0.11400000005960464f)) + (hash21_0(floor(_S3.uv_0 * (&kernelContext_0)->u_0->res_0 / float2(2.0f) )) - 0.5f) * 0.2199999988079071f);
+
+#line 100
+    float _S7 = 1.0f - t_1;
+
+
+
+    float2 d_1 = _S3.uv_0 - float2(0.5f) ;
+
+#line 104
+    pixelOutput_0 _S8 = { float4((scene_0 * float3(emerge_2)  + amber_0 * float3(((1.0f - smoothstep(0.0f, 0.75f, t_1)) * 0.55000001192092896f))  * float3((0.25f + 0.75f * emerge_2))  * float3((1.0f - emerge_2 * 0.60000002384185791f))  + float3(((hash21_0(_S3.uv_0 * (&kernelContext_0)->u_0->res_0 + float2(floor((&kernelContext_0)->u_0->time_0 * 24.0f)) ) - 0.5f) * 0.09000000357627869f * _S7)) ) * float3((1.0f - dot(d_1, d_1) * 0.89999997615814209f * _S7)) , 1.0f) };
+
+    return _S8;
+}
+
