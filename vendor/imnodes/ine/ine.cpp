@@ -1,4 +1,7 @@
 // Minimal C wrapper over Nelarius/imnodes for Odin consumption.
+// imnodes_internal first: it defines IMGUI_DEFINE_MATH_OPERATORS before
+// imgui.h (needed by the screen->grid conversion at the bottom).
+#include <imnodes_internal.h>
 #include "ine.h"
 
 #include <imnodes.h>
@@ -108,3 +111,13 @@ void ine_push_attribute_flag(void *, int flag) {
     ImNodes::PushAttributeFlag(static_cast<ImNodesAttributeFlags>(flag));
 }
 void ine_pop_attribute_flag(void *) { ImNodes::PopAttributeFlag(); }
+
+// Screen -> grid space conversion (for spawning nodes at the mouse).
+void ine_screen_to_grid(void *ed, float sx, float sy, float *gx, float *gy) {
+    IneState *s = S(ed);
+    ImNodes::SetCurrentContext(s->ctx);
+    ImNodes::EditorContextSet(s->editor);
+    const ImNodesEditorContext &editor = ImNodes::EditorContextGet();
+    *gx = sx - GImNodes->CanvasOriginScreenSpace.x - editor.Panning.x;
+    *gy = sy - GImNodes->CanvasOriginScreenSpace.y - editor.Panning.y;
+}

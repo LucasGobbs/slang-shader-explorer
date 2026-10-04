@@ -79,6 +79,10 @@ void ine_pop_color_style(void *ed);
 void ine_push_attribute_flag(void *ed, int flag);
 void ine_pop_attribute_flag(void *ed);
 
+// Converts a screen-space point (e.g. the mouse) to editor grid space,
+// accounting for canvas origin and panning. For spawning nodes at the mouse.
+void ine_screen_to_grid(void *ed, float sx, float sy, float *gx, float *gy);
+
 #ifdef __cplusplus
 }
 #endif
