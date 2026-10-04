@@ -11,9 +11,11 @@ public struct SceneUniforms {
     public float4 iFbm;
     // 1.0 = scene's alternate look (e.g. color instead of ink),
     // 0.0 = default look. Driven by the "color" checkbox.
+    [UiToggle(0)]
     public float iColorMode;
     // Mouse position in pixels, same convention as frag_coord
     // (y up from the bottom).
+  	 
     public float2 iMousePos;
     // 1.0 while the left button is pressed outside the UI.
     public float iMouseClick;
@@ -25,6 +27,11 @@ public struct SceneUniforms {
     public float3 iCameraForward;
     // Free per-scene toggle (1.0 by default).
     public float iManual;
+    // Selected invocation for debug_watch_* helpers.
+    public uint2 iDebugPixel;
+    public uint iDebugEnabled;
+    public uint iDebugFrame;
+    public uint iDebugPass;
 }
 
 public float hash21(float2 p) {
@@ -86,6 +93,116 @@ public float bayer4(uint2 p) {
 
 public float3 orderedDither(float3 col, float levels, uint2 id) {
     return floor(saturate(col) * levels + bayer4(id)) / levels;
+}
+
+// Debug visualizations: map intermediate values to colors that can be
+// returned directly from a fragment/compute shader while investigating it.
+public float4 debug_scalar(float value, float minValue, float maxValue) {
+    float span = max(maxValue - minValue, 1e-6);
+    float t = saturate((value - minValue) / span);
+    return float4(t.xxx, 1.0);
+}
+
+public float4 debug_signed(float value, float absMax) {
+    float t = saturate(abs(value) / max(absMax, 1e-6));
+    float3 zero = float3(0.5);
+    float3 negative = float3(0.1, 0.35, 1.0);
+    float3 positive = float3(1.0, 0.2, 0.1);
+    return float4(lerp(zero, value < 0.0 ? negative : positive, t), 1.0);
+}
+
+public float4 debug_vector(float2 value) {
+    return float4(saturate(value * 0.5 + 0.5), 0.5, 1.0);
+}
+
+public float4 debug_vector(float3 value) {
+    return float4(saturate(value * 0.5 + 0.5), 1.0);
+}
+
+public float4 debug_normal(float3 normal) {
+    return float4(normalize(normal) * 0.5 + 0.5, 1.0);
+}
+
+public float4 debug_mask(bool value) {
+    return value ? float4(1.0) : float4(0.0, 0.0, 0.0, 1.0);
+}
+
+// Invalid-value convention shared with the blit overlay:
+// NaN = magenta, +Inf = yellow, -Inf = cyan.
+public float4 debug_nan_inf(float4 value) {
+    if (any(isnan(value))) return float4(1.0, 0.0, 1.0, 1.0);
+    if (any(isinf(value) && value < 0.0)) return float4(0.0, 1.0, 1.0, 1.0);
+    if (any(isinf(value))) return float4(1.0, 1.0, 0.0, 1.0);
+    return value;
+}
+
+// Selected-invocation watch console. The shared buffer is used by either
+// graphics or compute; dead-code elimination removes it from shaders that
+// never call a debug_watch_* helper.
+public static const uint DEBUG_WATCH_COUNT = 8;
+
+public struct DebugWatchRecord {
+    public uint frameId;
+    public uint type;   // 1=float, 2=float2, 3=float3, 4=float4
+    public uint count;
+    public uint reserved; // pass index
+    public float4 value;
+};
+[[vk::binding(0, 1)]]
+RWStructuredBuffer<DebugWatchRecord> debug_records;
+
+public void debug_watch_fragment(uint slot, float4 value, uint type, uint2 fragCoord, SceneUniforms debug) {
+    if (debug.iDebugEnabled == 0 || slot >= DEBUG_WATCH_COUNT || any(fragCoord != debug.iDebugPixel)) return;
+    DebugWatchRecord record;
+    record.frameId = debug.iDebugFrame;
+    record.type = type;
+    record.count = min(type, 4u);
+    record.reserved = debug.iDebugPass;
+    record.value = value;
+    debug_records[debug.iDebugPass * DEBUG_WATCH_COUNT + slot] = record;
+}
+
+public void debug_watch_fragment(uint slot, float value, uint2 fragCoord, SceneUniforms debug) {
+    debug_watch_fragment(slot, float4(value, 0, 0, 0), 1, fragCoord, debug);
+}
+
+public void debug_watch_fragment(uint slot, float2 value, uint2 fragCoord, SceneUniforms debug) {
+    debug_watch_fragment(slot, float4(value, 0, 0), 2, fragCoord, debug);
+}
+
+public void debug_watch_fragment(uint slot, float3 value, uint2 fragCoord, SceneUniforms debug) {
+    debug_watch_fragment(slot, float4(value, 0), 3, fragCoord, debug);
+}
+
+public void debug_watch_fragment(uint slot, float4 value, uint2 fragCoord, SceneUniforms debug) {
+    debug_watch_fragment(slot, value, 4, fragCoord, debug);
+}
+
+public void debug_watch_compute(uint slot, float4 value, uint type, uint2 dispatchId, SceneUniforms debug) {
+    if (debug.iDebugEnabled == 0 || slot >= DEBUG_WATCH_COUNT || any(dispatchId != debug.iDebugPixel)) return;
+    DebugWatchRecord record;
+    record.frameId = debug.iDebugFrame;
+    record.type = type;
+    record.count = min(type, 4u);
+    record.reserved = debug.iDebugPass;
+    record.value = value;
+    debug_records[debug.iDebugPass * DEBUG_WATCH_COUNT + slot] = record;
+}
+
+public void debug_watch_compute(uint slot, float value, uint2 dispatchId, SceneUniforms debug) {
+    debug_watch_compute(slot, float4(value, 0, 0, 0), 1, dispatchId, debug);
+}
+
+public void debug_watch_compute(uint slot, float2 value, uint2 dispatchId, SceneUniforms debug) {
+    debug_watch_compute(slot, float4(value, 0, 0), 2, dispatchId, debug);
+}
+
+public void debug_watch_compute(uint slot, float3 value, uint2 dispatchId, SceneUniforms debug) {
+    debug_watch_compute(slot, float4(value, 0), 3, dispatchId, debug);
+}
+
+public void debug_watch_compute(uint slot, float4 value, uint2 dispatchId, SceneUniforms debug) {
+    debug_watch_compute(slot, value, 4, dispatchId, debug);
 }
 
 // UI annotations for the playground: fields of a scene's own params
@@ -233,6 +350,7 @@ public float4 model_scene_fragment(
     SamplerState skyboxSampler,
     float3 modelColor)
 {
+	
     if (uniforms.iManual > 0.5) {
         const float CAMERA_F = 1.2; // must match camera.odin
         float aspect = uniforms.iResolution.x / uniforms.iResolution.y;
