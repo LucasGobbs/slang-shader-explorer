@@ -1,0 +1,1 @@
+{"scene":"compute","nodes":[{"key":"params","kind":"params","x":40.0,"y":40.0},{"key":"comp:scenes/compute/compute:computeMain","kind":"compute","x":40.0,"y":300.0},{"key":"show2d","kind":"output","x":340.0,"y":40.0}],"links":[{"from":"comp:scenes/compute/compute:computeMain:out_tex","to":"show2d:frame"}]}
