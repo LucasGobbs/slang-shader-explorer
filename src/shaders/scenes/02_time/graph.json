@@ -1,0 +1,1 @@
+{"scene":"02_time","nodes":[{"key":"params","kind":"params","x":-28.6,"y":50.1},{"key":"gfx:scenes/02_time/02_time","kind":"graphics","x":332.9,"y":-32.1},{"key":"show2d","kind":"output","x":683.0,"y":44.0}],"links":[{"from":"params:Params","to":"gfx:scenes/02_time/02_time:Params"},{"from":"gfx:scenes/02_time/02_time:frame","to":"show2d:frame"}]}

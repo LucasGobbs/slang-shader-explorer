@@ -1,0 +1,1 @@
+{"scene":"03_mouse","nodes":[{"key":"params","kind":"params","x":40.0,"y":40.0},{"key":"gfx:scenes/03_mouse/03_mouse","kind":"graphics","x":340.0,"y":40.0},{"key":"show2d","kind":"output","x":640.0,"y":40.0}],"links":[{"from":"params:Params","to":"gfx:scenes/03_mouse/03_mouse:Params"},{"from":"gfx:scenes/03_mouse/03_mouse:frame","to":"show2d:frame"}]}
