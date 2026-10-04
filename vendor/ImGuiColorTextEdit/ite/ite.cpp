@@ -19,9 +19,13 @@ struct IteState {
 	std::string buffer; // owned copy backing ite_get_text's return
 	bool goto_pending = false;
 	std::string goto_word;
+	bool rename_pending = false;
+	std::string rename_word;
 	TextEditor::Palette saved_palette;
 	bool palette_saved = false;
 	bool glass = false;
+	TextEditor::Palette fade_saved_palette;
+	bool fade_active = false;
 	// Completion provider (LSP bridge).
 	IteCompletionFn completion_fn = nullptr;
 	void *completion_user = nullptr;
@@ -87,6 +91,16 @@ void ite_goto_line(void *ed, size_t line) {
 
 size_t ite_get_cursor_line(void *ed) {
 	return S(ed)->editor.GetCursorPosition(0).line;
+}
+
+size_t ite_get_cursor_col(void *ed) {
+	return S(ed)->editor.GetCursorPosition(0).index;
+}
+
+void ite_set_cursor_pos(void *ed, size_t line, size_t col) {
+	TextEditor &e = S(ed)->editor;
+	e.SetCursor(TextEditor::DocPos(line, col));
+	e.ScrollToLine(line);
 }
 
 void ite_duplicate_line(void *ed) {
@@ -156,6 +170,28 @@ void ite_set_leading_whitespace_only(void *ed, bool on) {
 	S(ed)->editor.SetShowLeadingWhitespacesOnly(on);
 }
 
+void ite_set_fade(void *ed, float alpha) {
+	IteState *s = S(ed);
+	if (alpha >= 0.999f) {
+		if (s->fade_active) {
+			s->editor.SetPalette(s->fade_saved_palette);
+			s->fade_active = false;
+		}
+		return;
+	}
+	if (!s->fade_active) {
+		s->fade_saved_palette = s->editor.GetPalette();
+		s->fade_active = true;
+	}
+	TextEditor::Palette p = s->fade_saved_palette;
+	const ImU32 fade = (ImU32)(alpha * 255.0f);
+	for (size_t i = 0; i < p.size(); i++) {
+		const ImU32 a = (((p[i] >> 24) & 0xFF) * fade) / 255;
+		p[i] = (p[i] & 0x00FFFFFFu) | (a << 24);
+	}
+	s->editor.SetPalette(p);
+}
+
 static const ImU32 ITE_ERROR_RED = IM_COL32(230, 60, 60, 255);
 // Line-body highlight for errors: a translucent tint of the same red, so the
 // code on the offending line stays readable (the line-number cell and the
@@ -203,6 +239,13 @@ void ite_install_context_menu(void *ed) {
 				s->goto_word = w;
 			}
 		}
+		if (ImGui::MenuItem("Rename symbol", "")) {
+			std::string w = e.GetWordAtMousePos(ImGui::GetMousePos());
+			if (!w.empty()) {
+				s->rename_pending = true;
+				s->rename_word = w;
+			}
+		}
 	});
 }
 
@@ -212,6 +255,16 @@ bool ite_take_goto_word(void *ed, char *buf, size_t cap) {
 	s->goto_pending = false;
 	size_t n = s->goto_word.size() < cap - 1 ? s->goto_word.size() : cap - 1;
 	memcpy(buf, s->goto_word.data(), n);
+	buf[n] = '\0';
+	return true;
+}
+
+bool ite_take_rename_word(void *ed, char *buf, size_t cap) {
+	IteState *s = S(ed);
+	if (!s->rename_pending || cap == 0) return false;
+	s->rename_pending = false;
+	size_t n = s->rename_word.size() < cap - 1 ? s->rename_word.size() : cap - 1;
+	memcpy(buf, s->rename_word.data(), n);
 	buf[n] = '\0';
 	return true;
 }

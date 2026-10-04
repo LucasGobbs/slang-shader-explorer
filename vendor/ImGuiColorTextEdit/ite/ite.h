@@ -45,6 +45,10 @@ void ite_goto_line(void *ed, size_t line);
 
 // Current cursor line of the first cursor (0-based); for tests.
 size_t ite_get_cursor_line(void *ed);
+// Current cursor glyph index (0-based) of the first cursor.
+size_t ite_get_cursor_col(void *ed);
+// Moves the cursor to (line, col) and scrolls it into view.
+void ite_set_cursor_pos(void *ed, size_t line, size_t col);
 
 // Duplicates the current line below itself (undo-preserving).
 void ite_duplicate_line(void *ed);
@@ -53,6 +57,12 @@ void ite_duplicate_line(void *ed);
 // current-line highlight/border) translucent at `alpha` (0..1) while keeping
 // text/keywords fully opaque. off restores the saved palette exactly.
 void ite_set_glass(void *ed, bool on, float alpha);
+
+// Content fade for the open/close animation: scales the alpha of every
+// palette entry (0..1; >= 0.999 restores the pre-fade palette exactly).
+// ImGui's style alpha doesn't reach the component's raw draw-list colors,
+// so the fade must scale the palette itself.
+void ite_set_fade(void *ed, float alpha);
 
 // Themes: replace the whole palette. colors maps to the component's Color
 // enum (text, keyword, declaration, number, string, punctuation,
@@ -84,12 +94,15 @@ void ite_add_squiggle_range(void *ed, size_t sl, size_t sc, size_t el, size_t ec
 void ite_add_error_marker(void *ed, size_t line, const char *msg);
 
 // Installs the right-click context menu (Copy/Paste/Duplicate line/Go to
-// definition). "Go to definition" is deferred to the host: it sets a pending
-// flag + word, polled via ite_take_goto_word.
+// definition/Rename symbol). "Go to definition" and "Rename symbol" are
+// deferred to the host: each sets a pending flag + word, polled via the
+// ite_take_* functions.
 void ite_install_context_menu(void *ed);
 // If the menu asked for a goto-definition, copies the word into buf and
 // returns true (consuming the request).
 bool ite_take_goto_word(void *ed, char *buf, size_t cap);
+// Same for "Rename symbol".
+bool ite_take_rename_word(void *ed, char *buf, size_t cap);
 
 #ifdef __cplusplus
 }

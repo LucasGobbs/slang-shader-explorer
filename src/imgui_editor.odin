@@ -11,8 +11,11 @@ import im "../vendor/odin-imgui"
 import "base:runtime"
 import "core:c"
 import "core:fmt"
+import "core:log"
+import "core:math"
 import "core:os"
 import "core:strings"
+import "core:sync"
 import "core:time"
 
 foreign import ite "../vendor/ImGuiColorTextEdit/libite.a"
@@ -31,8 +34,11 @@ foreign ite {
 	ite_get_word_at_mouse :: proc(ed: rawptr, x: f32, y: f32, buf: cstring, cap: c.size_t) -> c.size_t ---
 	ite_goto_line :: proc(ed: rawptr, line: c.size_t) ---
 	ite_get_cursor_line :: proc(ed: rawptr) -> c.size_t ---
+	ite_get_cursor_col :: proc(ed: rawptr) -> c.size_t ---
+	ite_set_cursor_pos :: proc(ed: rawptr, line: c.size_t, col: c.size_t) ---
 	ite_duplicate_line :: proc(ed: rawptr) ---
 	ite_set_glass :: proc(ed: rawptr, on: bool, alpha: f32) ---
+	ite_set_fade :: proc(ed: rawptr, alpha: f32) ---
 	ite_set_palette_u32 :: proc(ed: rawptr, colors: [^]u32, count: c.size_t) ---
 	ite_use_dark_palette :: proc(ed: rawptr) ---
 	ite_use_light_palette :: proc(ed: rawptr) ---
@@ -42,6 +48,7 @@ foreign ite {
 	ite_add_error_marker :: proc(ed: rawptr, line: c.size_t, msg: cstring) ---
 	ite_install_context_menu :: proc(ed: rawptr) ---
 	ite_take_goto_word :: proc(ed: rawptr, buf: cstring, cap: c.size_t) -> bool ---
+	ite_take_rename_word :: proc(ed: rawptr, buf: cstring, cap: c.size_t) -> bool ---
 	ite_enable_completion :: proc(ed: rawptr, fn: IteCompletionFn, user: rawptr) ---
 	ite_set_change_callback :: proc(ed: rawptr, fn: IteChangeFn, user: rawptr) ---
 }
@@ -53,6 +60,9 @@ IteChangeFn :: #type proc "c" (user: rawptr)
 ied_debug_clicks: bool
 ied_selftest:     bool
 ied_selftest_frame: int
+// Self-test only: overrides the hovered word so the docs tooltip can be
+// exercised without mouse input.
+ied_debug_hover_word: string
 // Cmd/Shift tracked from raw SDL key events (io.KeySuper proved unreliable).
 ied_gui_held:   bool
 ied_shift_held: bool
@@ -67,13 +77,13 @@ OpenDoc :: struct {
 	text:   string, // owned; valid once loaded == true
 	loaded: bool,
 	dirty:  bool,
+	last_good: string, // owned; source text from the last loadable pipeline
 }
 
 ImGuiEditor :: struct {
 	handle:      rawptr,
 	open:        bool, // floating window visible (F1 toggles)
 	files:       [dynamic]string, // relative to SHADER_DIR, no .slang ("apple" -> "scenes/apple")
-	file_names:  [dynamic]cstring,
 	current:     int,        // index into files of the visible document (-1: none)
 	open_docs:   [dynamic]OpenDoc,
 	current_open: int,       // index into open_docs of the visible document (-1: none)
@@ -82,6 +92,9 @@ ImGuiEditor :: struct {
 	font_size:   f32, // code font in points; the UI font is Ui.font_size
 	last_scene:  string,
 	bg_transparent: bool,
+	// Glass mode transparency (component palette + window frame alpha);
+	// edited in the settings gear popup.
+	glass_alpha: f32,
 	theme:       EditorTheme,
 	// Deferred goto-definition: the component moves the cursor to the click
 	// point during Render of the same frame, clobbering an immediate jump,
@@ -97,13 +110,73 @@ ImGuiEditor :: struct {
 	lsp_dirty: bool,
 	lsp_change_frames: int,
 	lsp_diag_version: int,
+	build_success_version: int,
+	// Hover symbol docs: the word under the mouse is tracked while it
+	// dwells (~0.4 s), then resolved once into a signature + doc comment
+	// (ied_lookup_symbol) shown as a tooltip.
+	hover_word:  string, // owned
+	hover_dwell: int,
+	hover_sig:   string, // owned; "" = unresolved/hidden
+	hover_doc:   string, // owned
+	// FX motion state: open/close spring, the tab-switch crossfade
+	// overlay, and the status row's fade-in.
+	open_anim:    Anim,
+	tab_flash:    f32,
+	last_open_tab: int,
+	status_fade:  f32,
+	last_status:  string, // owned
+	// Fixed backing for `status` (no temp-allocator string, so the
+	// per-frame free_all in main never frees memory the UI still shows).
+	status_buf: [256]u8,
+	// Context-menu "Rename symbol": the word to rename (owned), popup open
+	// request, and the InputText buffer for the new name.
+	rename_word: string,
+	rename_open: bool,
+	rename_buf:  [64]u8,
+	// Navigation history (Option+'-' jumps back): cursor positions worth
+	// returning to — goto-definition origins and moves larger than a few
+	// lines. Keeps the last 32 (at least the 10 requested).
+	nav_history:  [dynamic]NavPos,
+	nav_snapshot: NavPos,
+	nav_valid:    bool,
+	// Typing-FX (power mode): text area origin for caret particle bursts.
+	text_pos:      [2]f32,
+	line_h:        f32, // the component's real line height (from ImGui)
+	char_w:        f32, // measured glyph advance of the editor font
+	type_burst_ns: i64,
+	// Ice scroll: wheel velocity that glides with exponential friction.
+	scroll_vel: f32,
 }
 
-// Component change callback: marks the document as needing an LSP sync.
+NavPos :: struct {
+	file: int, // index into ImGuiEditor.files
+	line: int,
+	col:  int,
+}
+
+// Component change callback: marks the document as needing an LSP sync,
+// and fires the typing-FX burst at the caret (throttled — a keystroke
+// storm reads as a spray, not a machine gun).
 ied_on_change :: proc "c" (user: rawptr) {
+	context = runtime.default_context()
 	ed := (^ImGuiEditor)(user)
 	ed.lsp_dirty = true
 	ed.lsp_change_frames = 0
+	if fx_settings == nil || !fx_on(fx_settings) || !fx_settings.particles do return
+	now := time.to_unix_nanoseconds(time.now())
+	if now-ed.type_burst_ns < 90 * i64(time.Millisecond) do return
+	ed.type_burst_ns = now
+	// Caret in pixels: real line metric from the component (the guessed
+	// 1.15× font size drifted a full line by mid-file), centered on the
+	// line, past the line-number gutter on X.
+	at := [2]f32 {
+		ed.text_pos.x + ed.char_w * 4 + f32(ite_get_cursor_col(ed.handle)) * ed.char_w,
+		ed.text_pos.y + (f32(ite_get_cursor_line(ed.handle)) + 0.5) * ed.line_h,
+	}
+	fx_burst(fx_settings, at, 6, 6, 90)
+	log.debugf("[typefx] line %d text_pos=(%.0f,%.0f) line_h=%.0f -> y %.0f", int(ite_get_cursor_line(ed.handle)), ed.text_pos.x, ed.text_pos.y, ed.line_h, at.y)
+	// Soft keypress click alongside the ink (ASMR set, random variant).
+	fx_sfx_play(.TYPE)
 }
 
 EditorTheme :: enum {
@@ -249,7 +322,12 @@ ied_init :: proc() -> ^ImGuiEditor {
 	ed.current_open = -1
 	ed.err_file = -1
 	ed.font_size = 16
+	ed.glass_alpha = 0.55
 	ed.open = true
+	ed.theme = .MONOKAI
+	ied_apply_theme(ed)
+	ed.last_open_tab = -1
+	ed.status_fade = 1
 
 	// slangd autocomplete (LSP): graceful no-op when the server is absent.
 	if ied_lsp == nil {
@@ -262,7 +340,7 @@ ied_init :: proc() -> ^ImGuiEditor {
 
 	ied_scan_dir(ed, "")
 	ied_scan_scene_dirs(ed)
-	fmt.printfln("[imgui-editor] %d shaders under %s", len(ed.files), SHADER_DIR)
+	log.infof("[imgui-editor] %d shaders under %s", len(ed.files), SHADER_DIR)
 	return ed
 }
 
@@ -318,7 +396,6 @@ ied_scan_dir :: proc(ed: ^ImGuiEditor, sub: string) {
 		}
 		if exists do continue
 		append(&ed.files, strings.clone(name))
-		append(&ed.file_names, strings.clone_to_cstring(name))
 	}
 }
 
@@ -347,17 +424,17 @@ ied_show :: proc(ed: ^ImGuiEditor, open_idx: int) {
 	if !doc.loaded {
 		data, err := os.read_entire_file(ied_file_path(ed, doc.file), context.allocator)
 		if err != nil {
-			ed.status = fmt.tprintf("could not read %s", ied_file_path(ed, doc.file))
+			ed.status = fmt.bprintf(ed.status_buf[:], tr("could not read %s"), ied_file_path(ed, doc.file))
 			return
 		}
 		doc.text = strings.clone(string(data))
 		doc.loaded = true
+		if doc.last_good == "" do doc.last_good = strings.clone(doc.text)
 	}
 	ed.current_open = open_idx
 	ed.current = doc.file
 	ite_set_text(ed.handle, strings.clone_to_cstring(doc.text, context.temp_allocator))
 	ed.saved_undo = ite_get_undo_index(ed.handle)
-	ed.status = fmt.tprintf("editing %s.slang", ed.files[ed.current])
 	// Force a re-sync of the freshly shown document to slangd.
 	ed.lsp_dirty = true
 	ed.lsp_change_frames = 18
@@ -395,6 +472,7 @@ ied_load :: proc(ed: ^ImGuiEditor, idx: int) {
 ied_close :: proc(ed: ^ImGuiEditor, open_idx: int) {
 	if open_idx < 0 || open_idx >= len(ed.open_docs) do return
 	delete(ed.open_docs[open_idx].text)
+	delete(ed.open_docs[open_idx].last_good)
 	ordered_remove(&ed.open_docs, open_idx)
 	if ed.current_open > open_idx {
 		ed.current_open -= 1
@@ -418,6 +496,25 @@ ied_load_named :: proc(ed: ^ImGuiEditor, name: string) {
 			ied_load(ed, i)
 			return
 		}
+	}
+}
+
+// Closes open docs under scenes/<unit>/. On a scene switch the previous
+// unit's tabs go away — EXCEPT dirty ones: unsaved work is never
+// destroyed, so those stay until the user saves (ied_save_all reaps them
+// once clean).
+ied_close_unit :: proc(ed: ^ImGuiEditor, unit: string) {
+	if unit == "" do return
+	prefix := fmt.tprintf("scenes/%s/", unit)
+	live_undo := ite_get_undo_index(ed.handle)
+	// Walk backwards: ied_close mutates open_docs in place.
+	for i := len(ed.open_docs) - 1; i >= 0; i -= 1 {
+		doc := &ed.open_docs[i]
+		rel := ed.files[doc.file]
+		if !strings.has_prefix(rel, prefix) do continue
+		dirty := doc.dirty || (i == ed.current_open && live_undo != ed.saved_undo)
+		if dirty do continue
+		ied_close(ed, i)
 	}
 }
 
@@ -515,7 +612,11 @@ ied_scene_rel :: proc(ed: ^ImGuiEditor, scene_name: string) -> string {
 // opened for unrelated files are left alone.
 ied_open_scene :: proc(ed: ^ImGuiEditor, scene_name: string) {
 	if scene_name == ed.last_scene do return
+	// Leaving a scene: its tabs close (dirty ones wait for the user to
+	// save — they are reaped by ied_save_all once clean).
+	old_scene := ed.last_scene
 	ed.last_scene = scene_name
+	ied_close_unit(ed, old_scene)
 	scene_rel := ied_scene_rel(ed, scene_name)
 	if scene_rel == "" do return
 	files := ied_scene_files(ed, scene_rel)
@@ -546,7 +647,7 @@ ied_save_all :: proc(ed: ^ImGuiEditor) -> int {
 		if !doc.loaded || !doc.dirty do continue
 		path := ied_file_path(ed, doc.file)
 		if os.write_entire_file(path, transmute([]u8)doc.text) != nil {
-			ed.status = fmt.tprintf("ERROR writing %s", path)
+			ed.status = fmt.bprintf(ed.status_buf[:], tr("ERROR writing %s"), path)
 			continue
 		}
 		doc.dirty = false
@@ -555,13 +656,63 @@ ied_save_all :: proc(ed: ^ImGuiEditor) -> int {
 	if ed.current_open >= 0 {
 		ed.saved_undo = ite_get_undo_index(ed.handle)
 	}
+	// Reap the now-clean tabs that don't belong to the current scene:
+	// dirty tabs survived the switch so the user could save them; once
+	// saved, they go away (shared files outside scenes/ never close).
+	if saved > 0 && ed.last_scene != "" {
+		current_prefix := fmt.tprintf("scenes/%s/", ed.last_scene)
+		for i := len(ed.open_docs) - 1; i >= 0; i -= 1 {
+			doc := &ed.open_docs[i]
+			rel := ed.files[doc.file]
+			if !strings.has_prefix(rel, "scenes/") do continue
+			if strings.has_prefix(rel, current_prefix) do continue
+			if doc.dirty do continue
+			ied_close(ed, i)
+		}
+	}
 	h, m, s := time.clock(time.now())
 	if saved > 0 {
-		ed.status = fmt.tprintf("saved %d file(s) at %02d:%02d:%02d", saved, h, m, s)
+		ed.status = fmt.bprintf(ed.status_buf[:], tr("saved %d file(s) at %02d:%02d:%02d"), saved, h, m, s)
 	} else {
-		ed.status = "nothing to save"
+		ed.status = fmt.bprintf(ed.status_buf[:], "%s", tr("nothing to save"))
 	}
 	return saved
+}
+
+ied_capture_last_good :: proc(ed: ^ImGuiEditor) {
+	for &doc in ed.open_docs {
+		if !doc.loaded || doc.dirty do continue
+		data, err := os.read_entire_file(ied_file_path(ed, doc.file), context.temp_allocator)
+		if err != nil do continue
+		delete(doc.last_good)
+		doc.last_good = strings.clone(string(data))
+	}
+}
+
+ied_has_current_build_error :: proc(ed: ^ImGuiEditor) -> bool {
+	if ed.current < 0 do return false
+	rel := ed.files[ed.current]
+	sync.mutex_lock(&scene_build_mu)
+	defer sync.mutex_unlock(&scene_build_mu)
+	for be in build_errors {
+		if be.file == rel do return true
+	}
+	return false
+}
+
+ied_restore_last_good :: proc(ed: ^ImGuiEditor) -> bool {
+	if ed.current_open < 0 || ed.current_open >= len(ed.open_docs) do return false
+	doc := &ed.open_docs[ed.current_open]
+	if doc.last_good == "" do return false
+	ite_set_text(ed.handle, strings.clone_to_cstring(doc.last_good, context.temp_allocator))
+	delete(doc.text)
+	doc.text = strings.clone(doc.last_good)
+	doc.loaded = true
+	doc.dirty = true
+	ed.lsp_dirty = true
+	ed.lsp_change_frames = 0
+	ed.status = fmt.bprintf(ed.status_buf[:], tr("restored last compiled version of %s"), ed.files[doc.file])
+	return true
 }
 
 // Find a definition for word in text: a top-level line (column 0) declaring
@@ -584,11 +735,237 @@ ied_find_definition :: proc(text: string, word: string) -> (line: int, found: bo
 	return 0, false
 }
 
+// Symbol docs for a word in text: the trimmed definition line (multi-line
+// signatures joined) plus the contiguous //-comment block directly above
+// it, newest line last. All strings use the temp allocator.
+ied_symbol_in_text :: proc(text: string, word: string) -> (sig, doc: string, found: bool) {
+	def, ok := ied_find_definition(text, word)
+	if !ok do return "", "", false
+	lines := strings.split_lines(text, context.temp_allocator)
+	sig = strings.trim_space(lines[def])
+	// Join continuation lines while the signature has no closing paren
+	// (Slang parameters often wrap).
+	for i := def + 1; !strings.contains(sig, ")") && i < len(lines); i += 1 {
+		sig = fmt.tprintf("%s %s", sig, strings.trim_space(lines[i]))
+	}
+	// Doc block: contiguous // lines directly above the definition.
+	end := def - 1
+	for end >= 0 {
+		l := strings.trim_space(lines[end])
+		if l != "" do break
+		end -= 1
+	}
+	start := end
+	for start >= 0 {
+		l := strings.trim_space(lines[start])
+		if !strings.has_prefix(l, "//") do break
+		start -= 1
+	}
+	if end >= 0 && start < end {
+		for i := start + 1; i <= end; i += 1 {
+			line := strings.trim_prefix(strings.trim_space(lines[i]), "//")
+			if doc == "" {
+				doc = strings.trim_space(line)
+			} else {
+				doc = fmt.tprintf("%s\n%s", doc, strings.trim_space(line))
+			}
+		}
+	}
+	return sig, doc, true
+}
+
+// Resolve a symbol for hover docs: current file first, then the other
+// shaders (same search order as goto-definition).
+ied_lookup_symbol :: proc(ed: ^ImGuiEditor, word: string) -> (sig, doc: string, found: bool) {
+	if sig2, doc2, ok := ied_symbol_in_text(string(ite_get_text(ed.handle)), word); ok {
+		return sig2, doc2, true
+	}
+	for f, i in ed.files {
+		if i == ed.current do continue
+		data, err := os.read_entire_file(ied_file_path(ed, i), context.temp_allocator)
+		if err != nil do continue
+		if sig2, doc2, ok := ied_symbol_in_text(string(data), word); ok {
+			return sig2, doc2, true
+		}
+	}
+	return "", "", false
+}
+
+// Whole-word replace of old_name with new_name in text (identifier
+// boundaries on both sides, so "fbm" doesn't touch "afbm"/"fbm2").
+// Returns the original string and 0 when nothing matched.
+text_replace_word :: proc(text, old_name, new_name: string) -> (string, int) {
+	if old_name == "" do return text, 0
+	sb := strings.builder_make(context.temp_allocator)
+	count := 0
+	start := 0
+	for start <= len(text) - len(old_name) {
+		idx := strings.index(text[start:], old_name)
+		if idx < 0 do break
+		i := start + idx
+		end := i + len(old_name)
+		is_word := (i == 0 || !sg_is_ident(text[i - 1])) && (end == len(text) || !sg_is_ident(text[end]))
+		if !is_word {
+			strings.write_string(&sb, text[start:end])
+			start = end
+			continue
+		}
+		strings.write_string(&sb, text[start:i])
+		strings.write_string(&sb, new_name)
+		start = end
+		count += 1
+	}
+	if count == 0 do return text, 0
+	strings.write_string(&sb, text[start:])
+	return strings.to_string(sb), count
+}
+
+// Slang keywords/builtin types: renaming one of these would corrupt every
+// file, so the rename command refuses them outright.
+IED_KEYWORDS := []string {
+	"if", "else", "for", "while", "switch", "case", "break", "continue", "return",
+	"struct", "class", "import", "public", "static", "const", "in", "out", "inout",
+	"void", "bool", "int", "uint", "float", "half", "double", "true", "false",
+	"let", "var", "cbuffer", "typedef", "enum", "interface", "namespace",
+	"groupshared", "uniform", "discard",
+	"bool2", "bool3", "bool4", "int2", "int3", "int4", "uint2", "uint3", "uint4",
+	"float2", "float3", "float4", "half2", "half3", "half4",
+	"double2", "double3", "double4",
+	"Texture2D", "Texture3D", "TextureCube", "RWTexture2D", "SamplerState",
+	"ConstantBuffer", "vector", "matrix",
+}
+
+ied_is_keyword :: proc(word: string) -> bool {
+	for k in IED_KEYWORDS {
+		if word == k do return true
+	}
+	return false
+}
+
+ied_open_doc :: proc(ed: ^ImGuiEditor, file_idx: int) -> (^OpenDoc, bool) {
+	for &doc in ed.open_docs {
+		if doc.file == file_idx do return &doc, true
+	}
+	return nil, false
+}
+
+// Renames old_name to new_name in every shader file (the context menu's
+// "Rename symbol" command). The current document is replaced in the
+// component, open tabs in their stash, the rest on disk; every touched
+// file is written. NOTE: textual (not semantic) rename — occurrences in
+// comments and strings are replaced too.
+ied_rename :: proc(ed: ^ImGuiEditor, old_name, new_name: string) {
+	if old_name == "" || new_name == "" || old_name == new_name do return
+	if ied_is_keyword(old_name) {
+		ed.status = fmt.bprintf(ed.status_buf[:], tr("refusing to rename keyword %s"), old_name)
+		return
+	}
+	total := 0
+	files_changed := 0
+	for f, i in ed.files {
+		text := ""
+		if i == ed.current {
+			text = string(ite_get_text(ed.handle))
+		} else if doc, ok := ied_open_doc(ed, i); ok && doc.loaded {
+			text = doc.text
+		} else {
+			data, err := os.read_entire_file(ied_file_path(ed, i), context.temp_allocator)
+			if err != nil do continue
+			text = string(data)
+		}
+		new_text, count := text_replace_word(text, old_name, new_name)
+		if count == 0 do continue
+		total += count
+		files_changed += 1
+		if i == ed.current {
+			ite_set_text(ed.handle, strings.clone_to_cstring(new_text, context.temp_allocator))
+			// The file write below matches the component content: not dirty.
+			ed.saved_undo = ite_get_undo_index(ed.handle)
+			ed.lsp_dirty = true
+		} else if doc, ok := ied_open_doc(ed, i); ok {
+			delete(doc.text)
+			doc.text = strings.clone(new_text)
+			doc.loaded = true
+			doc.dirty = false // written below
+		}
+		if os.write_entire_file(ied_file_path(ed, i), transmute([]u8)new_text) != nil {
+			ed.status = fmt.bprintf(ed.status_buf[:], tr("ERROR writing %s"), ied_file_path(ed, i))
+			return
+		}
+	}
+	ed.status = fmt.bprintf(ed.status_buf[:],
+		tr("renamed %s → %s: %d occurrence(s) in %d file(s)"),
+		old_name,
+		new_name,
+		total,
+		files_changed,
+	)
+}
+
+// Pushes a position onto the navigation history (dedup against the last
+// entry; keeps the newest 32).
+ied_nav_push :: proc(ed: ^ImGuiEditor, pos: NavPos) {
+	if n := len(ed.nav_history); n > 0 && ed.nav_history[n - 1] == pos do return
+	append(&ed.nav_history, pos)
+	if len(ed.nav_history) > 32 {
+		ordered_remove(&ed.nav_history, 0)
+	}
+}
+
+ied_nav_cursor :: proc(ed: ^ImGuiEditor) -> NavPos {
+	return NavPos {
+		file = ed.current,
+		line = int(ite_get_cursor_line(ed.handle)),
+		col  = int(ite_get_cursor_col(ed.handle)),
+	}
+}
+
+// Option+'-': jump back to the previous cursor position (file included).
+ied_nav_back :: proc(ed: ^ImGuiEditor) {
+	if len(ed.nav_history) == 0 {
+		ed.status = fmt.bprintf(ed.status_buf[:], "%s", tr("no previous position"))
+		return
+	}
+	pos := pop(&ed.nav_history)
+	if pos.file >= 0 && pos.file != ed.current {
+		ied_load(ed, pos.file)
+	}
+	ite_set_cursor_pos(ed.handle, c.size_t(pos.line), c.size_t(pos.col))
+	// The jump is the new snapshot: don't re-record it as a "big move".
+	ed.nav_snapshot = NavPos{file = ed.current, line = pos.line, col = pos.col}
+	ed.nav_valid = true
+	ed.status = fmt.bprintf(ed.status_buf[:], tr("back to %s:%d:%d"), ed.files[ed.current], pos.line + 1, pos.col + 1)
+}
+
+// Per-frame cursor tracking: moves larger than 8 lines (or across files)
+// push the previous position onto the history; small moves just update
+// the snapshot silently.
+ied_nav_tick :: proc(ed: ^ImGuiEditor) {
+	if ed.current < 0 {
+		ed.nav_valid = false
+		return
+	}
+	pos := ied_nav_cursor(ed)
+	if !ed.nav_valid {
+		ed.nav_snapshot = pos
+		ed.nav_valid = true
+		return
+	}
+	if pos.file != ed.nav_snapshot.file || abs(pos.line - ed.nav_snapshot.line) > 8 {
+		ied_nav_push(ed, ed.nav_snapshot)
+	}
+	ed.nav_snapshot = pos
+}
+
 // Jump to the definition of word (current file, then the other shaders).
 ied_goto_definition :: proc(ed: ^ImGuiEditor, word: string) {
+	// Record the origin so Option+'-' returns here.
+	if ed.current >= 0 {
+		ied_nav_push(ed, ied_nav_cursor(ed))
+	}
 	if line, ok := ied_find_definition(string(ite_get_text(ed.handle)), word); ok {
 		ite_goto_line(ed.handle, c.size_t(line))
-		ed.status = fmt.tprintf("%s: definition in %s.slang:%d", word, ed.files[ed.current], line + 1)
+		ed.status = fmt.bprintf(ed.status_buf[:], tr("%s: definition in %s.slang:%d"), word, ed.files[ed.current], line + 1)
 		return
 	}
 	for f, i in ed.files {
@@ -598,11 +975,11 @@ ied_goto_definition :: proc(ed: ^ImGuiEditor, word: string) {
 		if line, ok := ied_find_definition(string(data), word); ok {
 			ied_load(ed, i)
 			ite_goto_line(ed.handle, c.size_t(line))
-			ed.status = fmt.tprintf("%s: definition in %s.slang:%d", word, f, line + 1)
+			ed.status = fmt.bprintf(ed.status_buf[:], tr("%s: definition in %s.slang:%d"), word, f, line + 1)
 			return
 		}
 	}
-	ed.status = fmt.tprintf("%s: no definition found", word)
+	ed.status = fmt.bprintf(ed.status_buf[:], tr("%s: no definition found"), word)
 }
 
 ied_request_goto_word :: proc(ed: ^ImGuiEditor, word: string) {
@@ -632,38 +1009,101 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 			text := string(ite_get_text(ed.handle))
 			want, found := ied_find_definition(text, "hash21")
 			ok := file == "common" && found && int(line) == want
-			fmt.printfln(
+			log.infof(
 				"[ied-test] cross-file goto: %s.slang line %d (want common %d) %s",
 				file,
 				line,
 				want,
 				ok ? "PASS" : "FAIL",
 			)
+		case 47:
+			// Call-site resolution: words used at call sites must resolve
+			// cross-file (goto-definition and hover docs share this path).
+			words := [?]string{"fbm", "scene_uv", "appleDistances", "sdSegment", "is_outside", "frag_coord"}
+			for w in words {
+				_, _, found := ied_lookup_symbol(ed, w)
+				log.debugf("[ied-test] lookup %s: %s", w, found ? "OK" : "MISS")
+			}
+			// Doc extraction: frag_coord carries a //-comment above it.
+			sig, doc, found := ied_lookup_symbol(ed, "frag_coord")
+			ok := found && strings.contains(sig, "frag_coord") && strings.contains(doc, "y up")
+			log.debugf("[ied-test] hover docs: sig=%q doc=%q %s", sig, doc, ok ? "PASS" : "FAIL")
+		case 50:
+			// Rename helper: whole-word replace respects identifier
+			// boundaries (afbm/fbm2 untouched, comment + decl replaced).
+			src := "fbm(x) + afbm + fbm2(y) + fbm( z ); // fbm\nfloat fbm = 1.0;"
+			out, n := text_replace_word(src, "fbm", "noise_fbm")
+			ok := n == 4 &&
+				strings.contains(out, "noise_fbm(x)") &&
+				strings.contains(out, "noise_fbm( z )") &&
+				strings.contains(out, "float noise_fbm = 1.0") &&
+				strings.contains(out, "afbm") &&
+				strings.contains(out, "fbm2(y)") &&
+				!strings.contains(out, "noise_fbm2")
+			log.debugf("[ied-test] rename replace: %d replacements %s", n, ok ? "PASS" : "FAIL")
+			if !ok do log.debugf("[ied-test]   got: %s", out)
 		case 70:
 			// Glass mode visual check: same call path as the toolbar button.
 			ed.bg_transparent = true
-			ite_set_glass(ed.handle, true, 0.55)
-			fmt.println("[ied-test] glass enabled")
+			ite_set_glass(ed.handle, true, ed.glass_alpha)
+			log.debug("[ied-test] glass enabled")
 		case 80:
 			// Theme machinery check: monokai on screen for the screenshot.
 			ed.bg_transparent = false
-			ite_set_glass(ed.handle, false, 0.55)
+			ite_set_glass(ed.handle, false, ed.glass_alpha)
 			ed.theme = .MONOKAI
 			ied_apply_theme(ed)
-			fmt.println("[ied-test] monokai applied")
+			log.debug("[ied-test] monokai applied")
 		case 90:
 			// LSP chain check: completion straight from slangd for a known
 			// prefix in common.slang (hash21 lives at line 29).
 			if ied_lsp != nil {
 				data, _ := os.read_entire_file("src/shaders/common.slang", context.temp_allocator)
 				items := lsp_complete(ied_lsp, "file:///tmp/common.slang", string(data), 100, 4)
-				fmt.printfln("[ied-test] lsp completions: %d items", len(items))
+				log.debugf("[ied-test] lsp completions: %d items", len(items))
 				for item, i in items {
 					if i >= 5 do break
-					fmt.printfln("[ied-test]   %s (%s)", item.label, item.detail)
+					log.debugf("[ied-test]   %s (%s)", item.label, item.detail)
 				}
 			} else {
-				fmt.println("[ied-test] lsp unavailable")
+				log.debug("[ied-test] lsp unavailable")
+			}
+		case 95:
+			// Member completion: right after "Uniforms." slangd must offer
+			// the SceneUniforms fields (struct member access).
+			if ied_lsp != nil {
+				data, _ := os.read_entire_file("src/shaders/scenes/apple/apple.slang", context.temp_allocator)
+				text := string(data)
+				line, col := -1, 0
+				if idx := strings.index(text, "Uniforms.iResolution"); idx >= 0 {
+					prefix := text[:idx + len("Uniforms.")]
+					line = strings.count(prefix, "\n")
+					col = len(prefix)
+					if nl := strings.last_index(prefix, "\n"); nl >= 0 {
+						col = len(prefix) - nl - 1
+					}
+				}
+				// Real URI: imports ("../../common") must resolve for
+				// slangd to know SceneUniforms' members.
+				cwd, _ := os.get_working_directory(context.temp_allocator)
+				uri := fmt.tprintf("file://%s/src/shaders/scenes/apple/apple.slang", cwd)
+				items := lsp_complete(ied_lsp, uri, text, line, col)
+				has_field := false
+				for item in items {
+					if item.label == "iTime" || item.label == "iFbm" {
+						has_field = true
+						break
+					}
+				}
+				log.infof(
+					"[ied-test] member completion after '.': %d items %s",
+					len(items),
+					has_field ? "PASS" : "FAIL",
+				)
+				for item, i in items {
+					if i >= 5 do break
+					log.debugf("[ied-test]   %s (%s)", item.label, item.detail)
+				}
 			}
 		case 100:
 			// Live diagnostics check: break the DOCUMENT (not the file —
@@ -678,24 +1118,28 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 					// Programmatic SetText may not fire the change callback;
 					// force the dirty flag the way typing would.
 					ed.lsp_dirty = true
-					fmt.printfln("[ied-test] document broken, dirty=%v", ed.lsp_dirty)
+					log.debugf("[ied-test] document broken, dirty=%v", ed.lsp_dirty)
 				} else {
-					fmt.println("[ied-test] needle not found in document")
+					log.debug("[ied-test] needle not found in document")
 				}
 			}
 		case 130:
 			if ied_lsp != nil {
-				fmt.printfln(
+				log.infof(
 					"[ied-test] frame 130: dirty=%v diag_version=%d diag_files=%d",
 					ed.lsp_dirty,
 					ied_lsp.diag_version,
 					len(ied_lsp.diagnostics),
 				)
 			}
+		case 150:
+			// Hover docs visual check: force the hovered word so the
+			// signature + doc tooltip renders (screenshot target).
+			ied_debug_hover_word = "frag_coord"
 		case 400:
 			if ied_lsp != nil {
 				diags, has := ied_lsp.diagnostics[ied_scene_rel(ed, "apple")]
-				fmt.printfln(
+				log.infof(
 					"[ied-test] live diagnostics: %d for scenes/apple %s (diag_version=%d, files=%d)",
 					has ? len(diags) : 0,
 					has && len(diags) > 0 ? "PASS" : "FAIL",
@@ -704,9 +1148,17 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 				)
 				for d, i in diags {
 					if i >= 3 do break
-					fmt.printfln("[ied-test]   line %d: %s", d.line + 1, d.msg)
+					log.debugf("[ied-test]   line %d: %s", d.line + 1, d.msg)
 				}
 			}
+		case 420:
+			restored := ied_restore_last_good(ed)
+			matches := false
+			if restored && ed.current_open >= 0 {
+				doc := &ed.open_docs[ed.current_open]
+				matches = string(ite_get_text(ed.handle)) == doc.last_good
+			}
+			log.infof("[ied-test] restore last compiled: %s", restored && matches ? "PASS" : "FAIL")
 		}
 	}
 
@@ -714,19 +1166,28 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 	// context menu).
 	if ed.goto_pending {
 		ed.goto_pending = false
-		if ied_debug_clicks do fmt.printfln("[ied] executing deferred goto: %q", ed.goto_word)
+		if ied_debug_clicks do log.debugf("[ied] executing deferred goto: %q", ed.goto_word)
 		ied_goto_definition(ed, ed.goto_word)
 		delete(ed.goto_word)
 		ed.goto_word = ""
 	}
 
-	// Context-menu "Go to definition" requests arrive through the wrapper.
+	// Context-menu "Go to definition" and "Rename symbol" requests arrive
+	// through the wrapper.
 	{
 		buf: [128]u8
 		if ite_take_goto_word(ed.handle, cstring(&buf[0]), len(buf)) {
 			ied_request_goto_word(ed, string(cstring(&buf[0])))
 		}
+		if ite_take_rename_word(ed.handle, cstring(&buf[0]), len(buf)) {
+			delete(ed.rename_word)
+			ed.rename_word = strings.clone(string(cstring(&buf[0])))
+			ed.rename_open = true
+		}
 	}
+
+	// Navigation history: track cursor moves worth returning to.
+	ied_nav_tick(ed)
 
 	// Live LSP sync: debounce text changes (~300ms) into didChange;
 	// publishDiagnostics arrive via the drain over the next frames.
@@ -743,8 +1204,14 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 	}
 
 	// Push diagnostics (goose-build errors on save + live slangd diagnostics)
-	// when either set changes or the current file changes.
+	if ed.build_success_version != build_success_version {
+		ed.build_success_version = build_success_version
+		ied_capture_last_good(ed)
+	}
+	// when either set changes or the current file changes. build_errors is
+	// written by the scene build worker — hold its mutex while reading.
 	lsp_diag_version := ied_lsp != nil ? ied_lsp.diag_version : 0
+	sync.mutex_lock(&scene_build_mu)
 	if ed.err_version != build_errors_version ||
 	   ed.err_file != ed.current ||
 	   ed.lsp_diag_version != lsp_diag_version {
@@ -783,6 +1250,7 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 			}
 		}
 	}
+	sync.mutex_unlock(&scene_build_mu)
 }
 
 // Editor panel content: toolbar, document tabs, the text component.
@@ -790,14 +1258,33 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 ied_panel :: proc(ed: ^ImGuiEditor) {
 	io := im.GetIO()
 
+	// Ice scroll: the wheel feeds a velocity that glides with exponential
+	// friction instead of ImGui's hard line-step jumps. Horizontal stays
+	// direct.
+	if im.IsWindowHovered({.ChildWindows}) && io.MouseWheel != 0 {
+		ed.scroll_vel += io.MouseWheel * 230
+		io.MouseWheel = 0
+	}
+	if ed.scroll_vel != 0 {
+		y := im.GetScrollY()
+		im.SetScrollY(y - ed.scroll_vel * io.DeltaTime)
+		ed.scroll_vel *= math.exp(-9 * io.DeltaTime)
+		if abs(ed.scroll_vel) < 2 do ed.scroll_vel = 0
+	}
+
 	// No toolbar: saving lives in the title bar's floppy button (and
 	// Cmd+S), browsing in the FILES sidebar mode, and appearance knobs in
-	// the strip's gear menu (ui_activity_strip).
-
-	// Status feedback (save results, goto messages) on its own dim row:
-	// inline after the theme combo it clipped at the panel edge.
-	if ed.status != "" {
-		im.TextDisabled("%s", strings_to_c(ed.status))
+	// the strip's gear menu (ui_activity_strip). No status row either —
+	// the tabs sit at the top.
+	if ied_has_current_build_error(ed) && ed.current_open >= 0 {
+		doc := &ed.open_docs[ed.current_open]
+		if doc.last_good != "" {
+			im.TextColored({0.95, 0.45, 0.30, 1}, "%s", strings_to_c(tr("build failed")))
+			im.SameLine()
+			if im.Button(trc("restore last compiled")) {
+				_ = ied_restore_last_good(ed)
+			}
+		}
 	}
 
 	// Tabs: one per open document, a single box holding the title and its
@@ -848,7 +1335,7 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 	}
 
 	if im.IsMouseClicked(.Left) && ied_debug_clicks {
-		fmt.printfln(
+		log.infof(
 			"[ied] click: super=%v gui=%v pos=(%.0f,%.0f) over_text=%v",
 			io.KeySuper,
 			ied_gui_held,
@@ -863,7 +1350,7 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 		if ite_is_mouse_over_text(ed.handle, io.MousePos.x, io.MousePos.y) {
 			buf: [128]u8
 			n := ite_get_word_at_mouse(ed.handle, io.MousePos.x, io.MousePos.y, cstring(&buf[0]), len(buf))
-			if ied_debug_clicks do fmt.printfln("[ied] word at click: %q (n=%d)", string(buf[:min(int(n), 127)]), n)
+			if ied_debug_clicks do log.debugf("[ied] word at click: %q (n=%d)", string(buf[:min(int(n), 127)]), n)
 			if n > 0 {
 				ied_request_goto_word(ed, string(buf[:min(int(n), len(buf) - 1)]))
 			}
@@ -875,33 +1362,145 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 		ite_duplicate_line(ed.handle)
 	}
 
+	// Rename popup (context menu's "Rename symbol"): pre-filled with the
+	// word, Enter or the button applies the rename across all files.
+	if ed.rename_open {
+		im.OpenPopup(trc("Rename symbol"))
+		ed.rename_open = false
+		for i in 0 ..< len(ed.rename_buf) do ed.rename_buf[i] = 0
+		copy(ed.rename_buf[:], ed.rename_word)
+	}
+	if im.BeginPopup(trc("Rename symbol"), {}) {
+		im.TextUnformatted(fmt.ctprintf(tr("rename '%s' to:"), ed.rename_word))
+		im.SetNextItemWidth(200)
+		apply := im.InputText(
+			"##new_name",
+			cstring(&ed.rename_buf[0]),
+			len(ed.rename_buf),
+			{.EnterReturnsTrue},
+		)
+		im.SameLine()
+		if im.Button(trc("Rename")) do apply = true
+		if apply {
+			ied_rename(ed, ed.rename_word, string(cstring(&ed.rename_buf[0])))
+			im.CloseCurrentPopup()
+		}
+		im.EndPopup()
+	}
+
 	// The code font size is independent of the UI font size
 	// (Ui.font_size): push the editor's own size around the text
 	// component only.
 	if app_font != nil {
 		im.PushFontFloat(app_font, ed.font_size)
 	}
+	// Tab-switch crossfade: a WindowBg overlay over the text area that
+	// fades out quickly, so the incoming document appears to fade in.
+	if ed.current_open != ed.last_open_tab {
+		ed.last_open_tab = ed.current_open
+		ed.tab_flash = 0.55
+	}
+	ed.tab_flash = max(0, ed.tab_flash - io.DeltaTime * 4)
+
+	text_pos := im.GetCursorScreenPos()
+	ed.text_pos = {text_pos.x, text_pos.y}
+	ed.line_h = im.GetTextLineHeight()
+	// Measured advance of the editor font (the guessed 0.6 × line_h ran
+	// ~8% wide, landing bursts a few characters right of the caret).
+	ed.char_w = im.CalcTextSize("0000000000").x * 0.1
 	avail := im.GetContentRegionAvail()
 	ite_render(ed.handle, "##ied", avail.x, avail.y)
+	if ed.tab_flash > 0 {
+		dl := im.GetWindowDrawList()
+		im.DrawList_AddRectFilled(
+			dl,
+			text_pos,
+			{text_pos.x + avail.x, text_pos.y + avail.y},
+			im.GetColorU32(.WindowBg, ed.tab_flash),
+		)
+	}
 	if app_font != nil {
 		im.PopFont()
+	}
+
+	// Hover symbol docs: dwell ~0.4 s on a word over the text, then show
+	// its signature plus the doc comment above the definition.
+	{
+		word := ied_debug_hover_word
+		if word == "" && !im.IsMouseDown(.Left) &&
+		   ite_is_mouse_over_text(ed.handle, io.MousePos.x, io.MousePos.y) {
+			buf: [128]u8
+			n := ite_get_word_at_mouse(ed.handle, io.MousePos.x, io.MousePos.y, cstring(&buf[0]), len(buf))
+			word = string(buf[:min(int(n), 127)])
+		}
+		if word != ed.hover_word {
+			delete(ed.hover_word)
+			ed.hover_word = strings.clone(word)
+			ed.hover_dwell = 0
+			if ed.hover_sig != "" {
+				delete(ed.hover_sig)
+				ed.hover_sig = ""
+				delete(ed.hover_doc)
+				ed.hover_doc = ""
+			}
+		} else if word != "" {
+			ed.hover_dwell += 1
+		}
+		if ed.hover_dwell == 25 {
+			sig, doc, found := ied_lookup_symbol(ed, ed.hover_word)
+			if found {
+				ed.hover_sig = strings.clone(sig)
+				ed.hover_doc = strings.clone(doc)
+			}
+		}
+		if ed.hover_dwell >= 25 && ed.hover_sig != "" {
+			// Self-test: the physical mouse may be outside the window (or
+			// never moved), so pin the tooltip inside the panel.
+			if ied_debug_hover_word != "" {
+				wp := im.GetWindowPos()
+				im.SetNextWindowPos({wp.x + 120, wp.y + 160})
+			}
+			if im.BeginTooltip() {
+				im.TextColored({0.62, 0.76, 0.95, 1}, "%s", strings_to_c(ed.hover_sig))
+				if ed.hover_doc != "" {
+					im.Separator()
+					im.TextUnformatted(strings_to_c(ed.hover_doc))
+				}
+				im.EndTooltip()
+			}
+		}
 	}
 }
 
 // The editor's floating window (F1 toggles); the panel content itself is
-// ied_panel. Kept separate from the sidebar by design.
-ied_frame :: proc(ed: ^ImGuiEditor) {
-	if !ed.open do return
+// ied_panel. Kept separate from the sidebar by design. Open/close springs
+// the window in from the right edge (fx).
+ied_frame :: proc(ed: ^ImGuiEditor, fx: ^Fx) {
 	io := im.GetIO()
+	anim_step(&ed.open_anim, ed.open ? 1 : 0, io.DeltaTime, fx)
+	if ed.open_anim.value < 0.02 && !ed.open do return
 	// Wide enough for the toolbar row (save all … theme) on small windows.
 	win_w := max(io.DisplaySize.x * 0.45, 430)
-	im.SetNextWindowPos({io.DisplaySize.x - win_w - 8, TITLEBAR_H + 8}, .FirstUseEver)
-	im.SetNextWindowSize({win_w, io.DisplaySize.y - TITLEBAR_H - 16}, .FirstUseEver)
-	im.SetNextWindowBgAlpha(ed.bg_transparent ? 0.55 : 1.0)
-	if !im.Begin("Shader editor (F1)", &ed.open, {}) {
+	xoff := (1 - ed.open_anim.value) * 60
+	im.SetNextWindowPos({io.DisplaySize.x - win_w - 8 + xoff, TITLEBAR_H + 8}, .Always)
+	im.SetNextWindowSize({win_w, io.DisplaySize.y - TITLEBAR_H - 16}, .Always)
+	// Deterministic startup: the editor always opens expanded; what the
+	// user does after that is theirs (demo framing on every launch).
+	im.SetNextWindowCollapsed(false, .Once)
+	im.SetNextWindowBgAlpha((ed.bg_transparent ? ed.glass_alpha : 1.0) * ed.open_anim.value)
+	// The ##ed2 suffix sidesteps a poisoned imgui.ini section saved with
+	// an off-screen position when the app exits minimized (DisplaySize 0
+	// makes the computed x negative); the fresh section starts clean.
+	if !im.Begin(fmt.ctprintf("%s##ed2", tr("Shader editor")), &ed.open, {}) {
 		im.End()
 		return
 	}
+	// The window frame animates via open_anim; the content must fade too:
+	// style alpha for the ImGui chrome (tabs), palette fade for the text
+	// component (its raw draw-list colors ignore style alpha).
+	im.PushStyleVar(.Alpha, ed.open_anim.value)
+	ite_set_fade(ed.handle, ed.open_anim.value)
 	ied_panel(ed)
+	im.PopStyleVar()
 	im.End()
 }

@@ -991,7 +991,7 @@ protected:
 		bool showMiniMap = false;
 		size_t miniMapColumns = 0;
 		bool showScrollbarMiniMap = true;
-		bool showCurrentLineHighlight = true;
+		bool showCurrentLineHighlight = false;
 		bool showMatchingBrackets = true;
 		bool completePairedGlyphs = true;
 		bool lineFolding = false;

@@ -262,8 +262,11 @@ void TextEditor::renderCurrentLineHighlight() {
 
 			if (inserted) {
 				const auto& line = document[lineNumber];
-				const auto topLeft = ImVec2(textLeftOffset, cursorScreenPos.y + line.row * glyphSize.y);
-				const auto bottomRight = topLeft + ImVec2(textRightOffset, line.rows * glyphSize.y);
+				// Screen-space rect: every other renderer adds
+				// cursorScreenPos.x to the offsets; textRightOffset is a
+				// width, so subtract the left offset for the rect width.
+				const auto topLeft = ImVec2(cursorScreenPos.x + textLeftOffset, cursorScreenPos.y + line.row * glyphSize.y);
+				const auto bottomRight = topLeft + ImVec2(textRightOffset - textLeftOffset, line.rows * glyphSize.y);
 
 				drawList->AddRectFilled(topLeft, bottomRight, palette.get(Color::currentLineHighlight));
 				drawList->AddRect(topLeft, bottomRight, palette.get(Color::currentLineHighlightBorder));
@@ -2559,7 +2562,9 @@ void TextEditor::handleCharacter(ImWchar character) {
 
 	endTransaction(transaction);
 
-	if (CodePoint::isWord(character)) {
+	// typing a word character starts autocomplete; '.' too (member access:
+	// struct/module fields and functions)
+	if (CodePoint::isWord(character) || character == '.') {
 		if (!cursors.hasMultiple() && autocomplete.startTyping(cursors)) {
 			makeCursorVisible();
 		}
@@ -4746,6 +4751,20 @@ TextEditor::LineState TextEditor::Colorizer::updateLine(Line& line) {
 
 					} else if (language->identifiers.find(identifier) != language->identifiers.end()) {
 						color = Color::knownIdentifier;
+
+					// PascalCase identifier: a user-defined type name
+					// (struct/class), e.g. SceneUniforms, AppleDist, with
+					// the theme's declaration color; ALL_CAPS names are
+					// constants (MAX_ITERS, PI) and take the number color.
+					} else if (!identifier.empty() && identifier[0] >= 'A' && identifier[0] <= 'Z') {
+						bool allCaps = identifier.size() > 1;
+						for (char ch : identifier) {
+							if (ch >= 'a' && ch <= 'z') {
+								allCaps = false;
+								break;
+							}
+						}
+						color = allCaps ? Color::number : Color::declaration;
 
 					// a plain identifier immediately followed by '(' is a
 					// function call: color it as a known identifier so calls
@@ -8606,6 +8625,14 @@ bool TextEditor::AutoComplete::render(Document& document, Cursors& cursors, Type
 					updateState(document, language);
 					refreshSuggestions();
 				}
+
+			} else if (newLocation.index > 0 && document[newLocation.line][newLocation.index - 1].codepoint == '.') {
+				// member access: '.' starts a fresh completion for the
+				// member word instead of closing the popup
+				startLocation = newLocation;
+				currentLocation = newLocation;
+				updateState(document, language);
+				refreshSuggestions();
 
 			} else {
 				requestDeactivation = true;
@@ -13357,13 +13384,13 @@ const TextEditor::Language* TextEditor::Language::Hlsl() {
 		static const char* const keywords[] = {
 			"AppendStructuredBuffer", "asm", "asm_fragment", "BlendState", "bool", "break", "Buffer",
 			"ByteAddressBuffer", "case", "cbuffer", "centroid", "class", "column_major", "compile",
-			"compile_fragment", "CompileShader", "const", "continue", "ComputeShader", "ConsumeStructuredBuffer",
+			"compile_fragment", "CompileShader", "const", "ConstantBuffer", "continue", "ComputeShader", "ConsumeStructuredBuffer",
 			"default", "DepthStencilState", "DepthStencilView", "discard", "do", "double", "DomainShader", "dword",
 			"else", "export", "extern", "false", "float", "for", "fxgroup", "GeometryShader", "groupshared", "half",
 			"Hullshader", "if", "in", "inline", "inout", "InputPatch", "int", "interface", "line", "lineadj",
 			"linear", "LineStream", "matrix", "min16float", "min10float", "min16int", "min12int", "min16uint",
 			"namespace", "nointerpolation", "noperspective", "NULL", "out", "OutputPatch", "packoffset",
-			"pass", "pixelfragment", "PixelShader", "point", "PointStream", "precise", "RasterizerState",
+			"pass", "pixelfragment", "PixelShader", "point", "PointStream", "precise", "public", "RasterizerState",
 			"RenderTargetView", "return", "register", "row_major", "RWBuffer", "RWByteAddressBuffer",
 			"RWStructuredBuffer", "RWTexture1D", "RWTexture1DArray", "RWTexture2D", "RWTexture2DArray",
 			"RWTexture3D", "sample", "sampler", "SamplerState", "SamplerComparisonState", "shared",
