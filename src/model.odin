@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:log"
 import "core:math"
 import "core:os"
 import "core:path/filepath"
@@ -95,7 +96,9 @@ model_upload :: proc(gpu: ^sdl.GPUDevice, vertices: []u8, indices: []u32, source
 		{usage = {.INDEX, .COMPUTE_STORAGE_READ}, size = u32(len(indices) * 4)},
 	)
 	if vb == nil || ib == nil {
-		fmt.eprintln("model: failed to create buffers")
+		if vb != nil do sdl.ReleaseGPUBuffer(gpu, vb)
+		if ib != nil do sdl.ReleaseGPUBuffer(gpu, ib)
+		log.errorf("model: failed to create buffers for %s: %s", source, sdl.GetError())
 		return model
 	}
 	model.vb = vb
@@ -103,9 +106,20 @@ model_upload :: proc(gpu: ^sdl.GPUDevice, vertices: []u8, indices: []u32, source
 
 	total := len(vertices) + len(indices) * 4
 	upload := sdl.CreateGPUTransferBuffer(gpu, {usage = .UPLOAD, size = u32(total)})
-	if upload == nil do return model
+	if upload == nil {
+		log.errorf("model: failed to create upload buffer for %s: %s", source, sdl.GetError())
+		sdl.ReleaseGPUBuffer(gpu, vb)
+		sdl.ReleaseGPUBuffer(gpu, ib)
+		return {}
+	}
 	defer sdl.ReleaseGPUTransferBuffer(gpu, upload)
 	ptr := sdl.MapGPUTransferBuffer(gpu, upload, false)
+	if ptr == nil {
+		log.errorf("model: failed to map upload buffer for %s: %s", source, sdl.GetError())
+		sdl.ReleaseGPUBuffer(gpu, vb)
+		sdl.ReleaseGPUBuffer(gpu, ib)
+		return {}
+	}
 	verts_dst := ([^]u8)(ptr)
 	idx_dst := ([^]u32)(uintptr(ptr) + uintptr(len(vertices)))
 	for b, i in vertices do verts_dst[i] = b
@@ -127,7 +141,12 @@ model_upload :: proc(gpu: ^sdl.GPUDevice, vertices: []u8, indices: []u32, source
 		false,
 	)
 	sdl.EndGPUCopyPass(copy_pass)
-	ok := sdl.SubmitGPUCommandBuffer(cmd); assert(ok)
+	if !sdl.SubmitGPUCommandBuffer(cmd) {
+		log.errorf("model: failed to submit upload for %s: %s", source, sdl.GetError())
+		sdl.ReleaseGPUBuffer(gpu, vb)
+		sdl.ReleaseGPUBuffer(gpu, ib)
+		return {}
+	}
 	return model
 }
 
@@ -153,12 +172,12 @@ model_load_all :: proc(gpu: ^sdl.GPUDevice) -> [dynamic]Model {
 				if dot > 0 do base = base[:dot]
 				model.name = strings.clone(base)
 				append(&models, model)
-				fmt.printfln("model: loaded %s", path)
+				log.infof("model: loaded %s", path)
 			}
 		}
 	}
 	if len(models) == 0 {
-		fmt.println("model: no .glb/.gltf in assets/models/, using generated icosphere")
+		log.info("model: no .glb/.gltf in assets/models/, using generated icosphere")
 	}
 	fallback := model_load_sphere(gpu)
 	fallback.name = "icosphere"
@@ -171,12 +190,12 @@ model_load_gltf :: proc(gpu: ^sdl.GPUDevice, path: string) -> (Model, bool) {
 	options: gltf.options
 	data, res := gltf.parse_file(options, path_c)
 	if res != .success || data == nil {
-		fmt.eprintfln("model: failed to parse %s", path)
+		log.errorf("model: failed to parse %s", path)
 		return {}, false
 	}
 	defer gltf.free(data)
 	if gltf.load_buffers(options, data, path_c) != .success {
-		fmt.eprintfln("model: failed to load buffers of %s", path)
+		log.errorf("model: failed to load buffers of %s", path)
 		return {}, false
 	}
 
@@ -246,7 +265,7 @@ model_load_gltf :: proc(gpu: ^sdl.GPUDevice, path: string) -> (Model, bool) {
 		}
 	}
 	if len(indices) == 0 {
-		fmt.eprintfln("model: %s has no triangles", path)
+		log.errorf("model: %s has no triangles", path)
 		return {}, false
 	}
 	model_normalize_bounds(vertices[:])
