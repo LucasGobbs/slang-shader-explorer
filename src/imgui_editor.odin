@@ -774,8 +774,51 @@ ied_symbol_in_text :: proc(text: string, word: string) -> (sig, doc: string, fou
 	return sig, doc, true
 }
 
+// Curated docs for the Slang builtins the trail uses most. Consulted only
+// when no user definition resolves, so project symbols always win.
+IedBuiltinDoc :: struct {
+	name, sig, doc: string,
+}
+IED_BUILTIN_DOCS := []IedBuiltinDoc {
+	{
+		"clamp",
+		"T clamp<T>(T x, T minVal, T maxVal)",
+		"Constrains x to [minVal, maxVal]: below minVal returns minVal, above maxVal returns maxVal. Works component-wise on vectors. clamp(uv, 0.0, 1.0) keeps coordinates inside the unit square.",
+	},
+	{
+		"lerp",
+		"T lerp<T>(T a, T b, S t)",
+		"Linear interpolation: a + (b - a) * t. t = 0 gives a, t = 1 gives b, 0.5 the midpoint; t outside [0,1] extrapolates. GLSL calls this mix.",
+	},
+	{
+		"smoothstep",
+		"T smoothstep<T>(T edge0, T edge1, T x)",
+		"Smooth Hermite transition from 0 to 1 as x goes from edge0 to edge1, with zero slope at both ends. The standard way to soften SDF edges: smoothstep(-w, w, d).",
+	},
+	{
+		"step",
+		"T step<T>(T edge, T x)",
+		"0.0 when x < edge, 1.0 otherwise. A hard threshold; compare with smoothstep for a soft edge. step(0.5, uv.x) splits the image vertically.",
+	},
+	{
+		"fract",
+		"T fract<T>(T x)",
+		"Fractional part: x - floor(x), always in [0,1). Tiling and repetition primitive: fract(uv * 4.0) repeats the pattern 4x per axis.",
+	},
+	{
+		"ddx",
+		"T ddx<T>(T x)",
+		"Partial derivative of x along screen-space X, estimated from 2x2 pixel quads. Base of anti-aliased edges: fwidth(d) = abs(ddx(d)) + abs(ddy(d)).",
+	},
+	{
+		"ddy",
+		"T ddy<T>(T x)",
+		"Partial derivative of x along screen-space Y, estimated from 2x2 pixel quads. Pair with ddx for fwidth-based filtering.",
+	},
+}
+
 // Resolve a symbol for hover docs: current file first, then the other
-// shaders (same search order as goto-definition).
+// shaders (same search order as goto-definition), then the builtin table.
 ied_lookup_symbol :: proc(ed: ^ImGuiEditor, word: string) -> (sig, doc: string, found: bool) {
 	if sig2, doc2, ok := ied_symbol_in_text(string(ite_get_text(ed.handle)), word); ok {
 		return sig2, doc2, true
@@ -787,6 +830,9 @@ ied_lookup_symbol :: proc(ed: ^ImGuiEditor, word: string) -> (sig, doc: string, 
 		if sig2, doc2, ok := ied_symbol_in_text(string(data), word); ok {
 			return sig2, doc2, true
 		}
+	}
+	for b in IED_BUILTIN_DOCS {
+		if b.name == word do return b.sig, b.doc, true
 	}
 	return "", "", false
 }
@@ -1022,12 +1068,17 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 			words := [?]string{"fbm", "scene_uv", "appleDistances", "sdSegment", "is_outside", "frag_coord"}
 			for w in words {
 				_, _, found := ied_lookup_symbol(ed, w)
-				log.debugf("[ied-test] lookup %s: %s", w, found ? "OK" : "MISS")
+				log.infof("[ied-test] lookup %s: %s", w, found ? "OK" : "MISS")
 			}
 			// Doc extraction: frag_coord carries a //-comment above it.
 			sig, doc, found := ied_lookup_symbol(ed, "frag_coord")
 			ok := found && strings.contains(sig, "frag_coord") && strings.contains(doc, "y up")
-			log.debugf("[ied-test] hover docs: sig=%q doc=%q %s", sig, doc, ok ? "PASS" : "FAIL")
+			log.infof("[ied-test] hover docs: sig=%q doc=%q %s", sig, doc, ok ? "PASS" : "FAIL")
+			// Builtin docs resolve without any user definition; a project
+			// symbol still wins over the builtin table (clamp vs scene_uv).
+			bsig, bdoc, bfound := ied_lookup_symbol(ed, "clamp")
+			bok := bfound && strings.contains(bsig, "clamp") && strings.contains(bdoc, "minVal")
+			log.infof("[ied-test] builtin docs (clamp): %s", bok ? "PASS" : "FAIL")
 		case 50:
 			// Rename helper: whole-word replace respects identifier
 			// boundaries (afbm/fbm2 untouched, comment + decl replaced).
@@ -1040,33 +1091,33 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 				strings.contains(out, "afbm") &&
 				strings.contains(out, "fbm2(y)") &&
 				!strings.contains(out, "noise_fbm2")
-			log.debugf("[ied-test] rename replace: %d replacements %s", n, ok ? "PASS" : "FAIL")
-			if !ok do log.debugf("[ied-test]   got: %s", out)
+			log.infof("[ied-test] rename replace: %d replacements %s", n, ok ? "PASS" : "FAIL")
+			if !ok do log.infof("[ied-test]   got: %s", out)
 		case 70:
 			// Glass mode visual check: same call path as the toolbar button.
 			ed.bg_transparent = true
 			ite_set_glass(ed.handle, true, ed.glass_alpha)
-			log.debug("[ied-test] glass enabled")
+			log.info("[ied-test] glass enabled")
 		case 80:
 			// Theme machinery check: monokai on screen for the screenshot.
 			ed.bg_transparent = false
 			ite_set_glass(ed.handle, false, ed.glass_alpha)
 			ed.theme = .MONOKAI
 			ied_apply_theme(ed)
-			log.debug("[ied-test] monokai applied")
+			log.info("[ied-test] monokai applied")
 		case 90:
 			// LSP chain check: completion straight from slangd for a known
 			// prefix in common.slang (hash21 lives at line 29).
 			if ied_lsp != nil {
 				data, _ := os.read_entire_file("src/shaders/common.slang", context.temp_allocator)
 				items := lsp_complete(ied_lsp, "file:///tmp/common.slang", string(data), 100, 4)
-				log.debugf("[ied-test] lsp completions: %d items", len(items))
+				log.infof("[ied-test] lsp completions: %d items", len(items))
 				for item, i in items {
 					if i >= 5 do break
-					log.debugf("[ied-test]   %s (%s)", item.label, item.detail)
+					log.infof("[ied-test]   %s (%s)", item.label, item.detail)
 				}
 			} else {
-				log.debug("[ied-test] lsp unavailable")
+				log.info("[ied-test] lsp unavailable")
 			}
 		case 95:
 			// Member completion: right after "Uniforms." slangd must offer
@@ -1102,7 +1153,7 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 				)
 				for item, i in items {
 					if i >= 5 do break
-					log.debugf("[ied-test]   %s (%s)", item.label, item.detail)
+					log.infof("[ied-test]   %s (%s)", item.label, item.detail)
 				}
 			}
 		case 100:
@@ -1118,9 +1169,9 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 					// Programmatic SetText may not fire the change callback;
 					// force the dirty flag the way typing would.
 					ed.lsp_dirty = true
-					log.debugf("[ied-test] document broken, dirty=%v", ed.lsp_dirty)
+					log.infof("[ied-test] document broken, dirty=%v", ed.lsp_dirty)
 				} else {
-					log.debug("[ied-test] needle not found in document")
+					log.info("[ied-test] needle not found in document")
 				}
 			}
 		case 130:
@@ -1148,7 +1199,7 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 				)
 				for d, i in diags {
 					if i >= 3 do break
-					log.debugf("[ied-test]   line %d: %s", d.line + 1, d.msg)
+					log.infof("[ied-test]   line %d: %s", d.line + 1, d.msg)
 				}
 			}
 		case 420:
@@ -1455,17 +1506,28 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 		}
 		if ed.hover_dwell >= 25 && ed.hover_sig != "" {
 			// Self-test: the physical mouse may be outside the window (or
-			// never moved), so pin the tooltip inside the panel.
+			// never moved), so pin the tooltip inside the panel. The pin
+			// must leave room for the capped width or the viewport clips
+			// the shot (real tooltips reposition around the mouse).
 			if ied_debug_hover_word != "" {
 				wp := im.GetWindowPos()
-				im.SetNextWindowPos({wp.x + 120, wp.y + 160})
+				im.SetNextWindowPos({wp.x - 40, wp.y + 160})
 			}
 			if im.BeginTooltip() {
+				// Cap the tooltip: unwrapped docs used to grow right
+				// without limit, and tall doc blocks had no scroll.
+				im.PushTextWrapPos(im.GetCursorPosX() + 440)
 				im.TextColored({0.62, 0.76, 0.95, 1}, "%s", strings_to_c(ed.hover_sig))
 				if ed.hover_doc != "" {
 					im.Separator()
-					im.TextUnformatted(strings_to_c(ed.hover_doc))
+					line_h := im.GetTextLineHeightWithSpacing()
+					doc_h := min(f32(strings.count(ed.hover_doc, "\n") + 1) * line_h, 14 * line_h)
+					if im.BeginChild("##hoverdoc", {440, doc_h}, {}) {
+						im.TextWrapped(strings_to_c(ed.hover_doc))
+					}
+					im.EndChild()
 				}
+				im.PopTextWrapPos()
 				im.EndTooltip()
 			}
 		}
