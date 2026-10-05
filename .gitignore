@@ -12,3 +12,4 @@ odin_bin
 *.bin
 imgui.ini
 artefacts/
+builds/
