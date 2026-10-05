@@ -1099,9 +1099,11 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 			log.infof("[ied-test] hover docs: sig=%q doc=%q %s", sig, doc, ok ? "PASS" : "FAIL")
 			// Builtin docs resolve without any user definition; a project
 			// symbol still wins over the builtin table (clamp vs scene_uv).
-			bsig, bdoc, bfound := ied_lookup_symbol(ed, "clamp")
-			bok := bfound && strings.contains(bsig, "clamp") && strings.contains(bdoc, "minVal")
-			log.infof("[ied-test] builtin docs (clamp): %s", bok ? "PASS" : "FAIL")
+			for b in IED_BUILTIN_DOCS {
+				bsig, bdoc, bfound := ied_lookup_symbol(ed, b.name)
+				bok := bfound && bsig != "" && bdoc != ""
+				log.infof("[ied-test] builtin docs (%s): %s", b.name, bok ? "PASS" : "FAIL")
+			}
 		case 50:
 			// Rename helper: whole-word replace respects identifier
 			// boundaries (afbm/fbm2 untouched, comment + decl replaced).
@@ -1209,7 +1211,7 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 		case 150:
 			// Hover docs visual check: force the hovered word so the
 			// signature + doc tooltip renders (screenshot target).
-			ied_debug_hover_word = "frag_coord"
+			ied_debug_hover_word = "smoothstep"
 		case 155:
 			// Shortcuts tab visual check (screenshot target).
 			emit(SetMode(.SHORTCUTS))
