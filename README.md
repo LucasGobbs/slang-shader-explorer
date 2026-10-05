@@ -8,6 +8,7 @@ the pipeline. A failed build never blanks the screen: the last working pipeline 
 up and the error comes back into the editor as an annotation.
 
 ![status](https://img.shields.io/badge/status-research%20prototype-orange)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23150234.svg)](https://doi.org/10.5281/zenodo.23150234)
 
 ## Features
 
