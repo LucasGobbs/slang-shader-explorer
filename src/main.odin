@@ -767,6 +767,12 @@ main :: proc() {
 	app_time: f32
 	ui.time = &app_time
 	prev_ticks := sdl.GetTicks()
+	// Unzoom-by-drag: a maximized (zoomed) window restores when the title
+	// bar is dragged and then follows the cursor, like the native frame.
+	// The SDL hit test reports the bar .NORMAL while maximized (AppKit
+	// won't unzoom a borderless window), so the drag is manual here.
+	unmax_drag: bool
+	unmax_off:  [2]f32 // cursor offset inside the restored window
 	main_loop: for {
 		// Reset the temp allocator every frame: every tprintf, file scan
 		frame_counter_start := sdl.GetPerformanceCounter()
@@ -898,7 +904,13 @@ main :: proc() {
 					ied.bg_transparent = !ied.bg_transparent
 					ite_set_glass(ied.handle, ied.bg_transparent, ied.glass_alpha)
 				case .ESCAPE:
-					if !imgui_kb do break main_loop
+					// ESC dismisses the pinned hover docs first; only
+					// then falls through to quit.
+					if ied.hover_shown {
+						ied_hover_close(ied)
+					} else if !imgui_kb {
+						break main_loop
+					}
 				case .SPACE:
 					if !imgui_kb {
 						// Zen mode: hide the sidebar and the editor. The
@@ -916,6 +928,36 @@ main :: proc() {
 					ied_gui_held = false
 				} else if event.key.key == sdl.K_LSHIFT || event.key.key == sdl.K_RSHIFT {
 					ied_shift_held = false
+				}
+			}
+
+			// Unzoom-by-drag on empty title-bar space while maximized:
+			// restore, then track the cursor until the button releases.
+			#partial switch event.type {
+			case .MOUSE_BUTTON_DOWN:
+				if event.button.button == sdl.BUTTON_LEFT &&
+				   .MAXIMIZED in sdl.GetWindowFlags(window) &&
+				   event.button.y < TITLEBAR_H &&
+				   !titlebar_point_hot(event.button.x, event.button.y) {
+					old_w, old_h: i32
+					sdl.GetWindowSize(window, &old_w, &old_h)
+					fx := event.button.x / f32(old_w)
+					fy := event.button.y
+					sdl.RestoreWindow(window)
+					new_w, new_h: i32
+					sdl.GetWindowSize(window, &new_w, &new_h)
+					unmax_off = {fx * f32(new_w), fy}
+					unmax_drag = true
+					continue
+				}
+			case .MOUSE_BUTTON_UP:
+				if event.button.button == sdl.BUTTON_LEFT do unmax_drag = false
+			case .MOUSE_MOTION:
+				if unmax_drag {
+					gx, gy: f32
+					_ = sdl.GetGlobalMouseState(&gx, &gy)
+					sdl.SetWindowPosition(window, i32(gx - unmax_off.x), i32(gy - unmax_off.y))
+					continue
 				}
 			}
 
