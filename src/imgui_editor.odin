@@ -124,6 +124,11 @@ ImGuiEditor :: struct {
 	hover_pin:   im.Vec2, // pinned tooltip position
 	hover_rect:  [4]f32, // last tooltip rect (min.xy, max.xy), padded
 	hover_grace: f32,    // countdown while crossing from word to tooltip
+	// The window docks to the right edge until the user drags its title
+	// bar somewhere else; after that ImGui owns the position. F1 and
+	// theater mode reset this, re-docking the window.
+	moved:        bool,
+	dock_display: [2]f32, // DisplaySize the dock position was forced for
 	// FX motion state: open/close spring, the tab-switch crossfade
 	// overlay, and the status row's fade-in.
 	open_anim:    Anim,
@@ -1603,8 +1608,20 @@ ied_frame :: proc(ed: ^ImGuiEditor, fx: ^Fx) {
 	// Wide enough for the toolbar row (save all … theme) on small windows.
 	win_w := max(io.DisplaySize.x * 0.45, 430)
 	xoff := (1 - ed.open_anim.value) * 60
-	im.SetNextWindowPos({io.DisplaySize.x - win_w - 8 + xoff, TITLEBAR_H + 8}, .Always)
-	im.SetNextWindowSize({win_w, io.DisplaySize.y - TITLEBAR_H - 16}, .Always)
+	dock_pos := im.Vec2{io.DisplaySize.x - win_w - 8 + xoff, TITLEBAR_H + 8}
+	dock_size := im.Vec2{win_w, io.DisplaySize.y - TITLEBAR_H - 16}
+	// Docked until the user drags the title bar away; then ImGui owns
+	// the position and size (still saved to imgui.ini). Forcing every
+	// frame would make the drag impossible, so the dock position is
+	// forced only during the open/close spring or when the window size
+	// changes; in between, a position mismatch below detects the drag.
+	display := [2]f32{io.DisplaySize.x, io.DisplaySize.y}
+	force := ed.open_anim.value < 1 || (!ed.moved && display != ed.dock_display)
+	if force {
+		im.SetNextWindowPos(dock_pos, .Always)
+		im.SetNextWindowSize(dock_size, .Always)
+		if !ed.moved do ed.dock_display = display
+	}
 	// Deterministic startup: the editor always opens expanded; what the
 	// user does after that is theirs (demo framing on every launch).
 	im.SetNextWindowCollapsed(false, .Once)
@@ -1615,6 +1632,11 @@ ied_frame :: proc(ed: ^ImGuiEditor, fx: ^Fx) {
 	if !im.Begin(fmt.ctprintf("%s##ed2", tr("Shader editor")), &ed.open, {}) {
 		im.End()
 		return
+	}
+	// A position different from the dock means the user dragged the
+	// title bar: hand the window over to ImGui from here on.
+	if !ed.moved && !force && im.GetWindowPos() != dock_pos {
+		ed.moved = true
 	}
 	// The window frame animates via open_anim; the content must fade too:
 	// style alpha for the ImGui chrome (tabs), palette fade for the text

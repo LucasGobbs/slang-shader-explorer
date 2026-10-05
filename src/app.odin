@@ -130,6 +130,7 @@ update :: proc(app: ^App, msg: Msg) -> Cmds {
 			app.ed.font_size = 21
 			ui.open = false // zen slide hides the sidebar
 			app.ed.open = true
+			app.ed.moved = false // theater docks the editor again
 		} else {
 			ui.theater = false
 			ui.font_size = ui.saved_ui_font

@@ -891,8 +891,10 @@ main :: proc() {
 				#partial switch event.key.scancode {
 				case .F1:
 					// The shader editor is a floating window, separate
-					// from the sidebar by design.
+					// from the sidebar by design. Reopening re-docks it
+					// (drops a user-dragged position).
 					ied.open = !ied.open
+					ied.moved = false
 				case .F3:
 					// Theater mode: one-shortcut recording composition
 					// (demo videos). Sidebar slides out, editor opens
