@@ -132,12 +132,13 @@ selection, multipass GPU writes, readback, type, pass, label, and provenance.
 Every hot reload logs a line:
 
 ```
-[INFO ] [latency] edit->pixel: 582.1 ms
+[INFO ] [latency] edit->pixel: 688.0 ms
 ```
 
-(measured from build request to the first submitted frame; median ≈ 0.58 s
-across the corpus on an Apple M4. This endpoint does not include display
-presentation, and the compiler/reflection/pipeline cost breakdown is not yet profiled.)
+(measured from build request to the first submitted frame; median ≈ 0.69 s
+across 12 edits of the same scene on an Apple M4, release build. This endpoint
+does not include display presentation, and the compiler/reflection/pipeline
+cost breakdown is not yet profiled.)
 
 ## Reproducing technical benchmarks
 
