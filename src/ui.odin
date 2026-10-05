@@ -56,6 +56,7 @@ SidebarMode :: enum {
 	GRAPH,
 	EXPORT,
 	EFFECTS,
+	SHORTCUTS,
 }
 
 Ui :: struct {
@@ -311,6 +312,8 @@ ui_build :: proc(
 			ui_export_panel(ui)
 		case .EFFECTS:
 			ui_fx_panel(ui)
+		case .SHORTCUTS:
+			ui_shortcuts_panel(ui)
 		}
 	}
 	im.End()

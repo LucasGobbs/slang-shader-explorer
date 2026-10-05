@@ -79,6 +79,16 @@ ui_strip_button :: proc(ui: ^Ui, mode: SidebarMode, index: int) -> bool {
 		// Ink droplet: teardrop.
 		im.DrawList_AddCircleFilled(dl, {cx, cy + 2.5}, 4.6, icon_col)
 		im.DrawList_AddTriangleFilled(dl, {cx - 4, cy + 1}, {cx + 4, cy + 1}, {cx, cy - 7}, icon_col)
+	case .SHORTCUTS:
+		// Keyboard: deck outline with two rows of keycaps.
+		im.DrawList_AddRect(dl, {cx - 9, cy - 5.5}, {cx + 9, cy + 5.5}, icon_col, 2, 1.4)
+		for r in 0 ..< 2 {
+			for k in 0 ..< 3 {
+				kx := cx - 5.5 + f32(k) * 5.5
+				ky := cy - 2.2 + f32(r) * 4.4
+				im.DrawList_AddRectFilled(dl, {kx - 1.6, ky - 1.4}, {kx + 1.6, ky + 1.4}, icon_col, 1)
+			}
+		}
 	}
 	return clicked
 }
@@ -107,7 +117,7 @@ ui_activity_strip :: proc(ui: ^Ui, ied: ^ImGuiEditor, x_off: f32) {
 	im.PushStyleVar(.WindowRounding, 0) // docked chrome is square
 	if im.Begin("##activity_strip", nil, flags) {
 		dl := im.GetWindowDrawList()
-		modes := [6]SidebarMode{.CONTROLS, .FILES, .LEARN, .GRAPH, .EXPORT, .EFFECTS}
+		modes := [7]SidebarMode{.CONTROLS, .FILES, .LEARN, .GRAPH, .EXPORT, .EFFECTS, .SHORTCUTS}
 
 		// Animated selection pill: slides to the active mode's slot
 		// (fx.springs; snaps when springs or the FX layer are off).
@@ -249,6 +259,8 @@ ui_panel_width :: proc(ui: ^Ui, mode: SidebarMode, display_w: f32) -> f32 {
 		return 280
 	case .EFFECTS:
 		return 280
+	case .SHORTCUTS:
+		return 320
 	}
 	return 300
 }
@@ -597,4 +609,44 @@ ui_panel_edge :: proc(ui: ^Ui, panel_x: f32) {
 	}
 	im.End()
 	im.PopStyleVar()
+}
+
+// One shortcuts-table row: the key/chord as an amber chip, then the
+// translated description. Keys stay raw (not i18n vocabulary).
+ui_key_row :: proc(key, desc: string) {
+	im.TextColored({0.91, 0.66, 0.34, 1}, "%s", strings_to_c(key))
+	im.SameLine(0, 12)
+	im.TextWrapped(strings_to_c(desc))
+}
+
+// SHORTCUTS mode: every command the app answers to, grouped by context.
+// The reference for rebinding discussions; keep in sync with main.odin
+// (function keys, Cmd chords, digits), imgui_editor.odin (editor chords)
+// and ui_chrome.odin (title-bar mouse actions).
+ui_shortcuts_panel :: proc(ui: ^Ui) {
+	im.TextDisabled(trc("shortcuts"))
+
+	im.SeparatorText(trc("window"))
+	ui_key_row("drag", tr("drag the title bar to move (unzooms first)"))
+	ui_key_row("2x click", tr("double-click the title bar to zoom"))
+	ui_key_row("green", tr("green light: fullscreen"))
+	ui_key_row("F1", tr("toggle shader editor"))
+	ui_key_row("F2", tr("toggle editor glass"))
+	ui_key_row("F3", tr("theater mode"))
+	ui_key_row("Space", tr("zen mode: hide panels"))
+	ui_key_row("Cmd+B", tr("toggle sidebar"))
+	ui_key_row("1-9", tr("select scene by number"))
+	ui_key_row("Esc", tr("close tooltip / quit"))
+
+	im.SeparatorText(trc("editor"))
+	ui_key_row("Cmd+S", tr("save all"))
+	ui_key_row("Cmd+click", tr("go to definition"))
+	ui_key_row("Cmd+Shift+D", tr("duplicate line"))
+	ui_key_row("Alt+-", tr("navigate back"))
+	ui_key_row("Ctrl+Z/Y", tr("undo / redo"))
+	ui_key_row("Ctrl+F", tr("find in file"))
+
+	im.SeparatorText(trc("scene"))
+	ui_key_row("click", tr("pixel inspector: click the scene to sample"))
+	ui_key_row("hover", tr("hold the mouse on a symbol for docs; wheel to scroll"))
 }
