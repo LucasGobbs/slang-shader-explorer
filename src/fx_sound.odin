@@ -1,5 +1,5 @@
 // Sound effects (the spectacle layer): tiny synthesized WAV blips played
-// through macOS afplay — no audio backend, no dependencies, and afplay
+// through macOS afplay: no audio backend, no dependencies, and afplay
 // failing (headless, muted) costs nothing because sound is pure feedback.
 // Files are synthesized once at startup into the temp dir; playback is
 // fire-and-forget with a per-kind throttle so typing/build spam can't

@@ -4,4 +4,4 @@ Aprenda shaders na prática: cada trilha mistura explicação curta com cenas vi
 
 ## Fundamentos
 
-- [Fragment shaders do zero](trail:fragment-basics) — uv, tempo e mouse: do primeiro pixel ao primeiro efeito interativo.
+- [Fragment shaders do zero](trail:fragment-basics): uv, tempo e mouse: do primeiro pixel ao primeiro efeito interativo.

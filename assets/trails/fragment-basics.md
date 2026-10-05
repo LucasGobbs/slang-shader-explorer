@@ -12,7 +12,7 @@ O primeiro passo é normalizar a coordenada: dividir o pixel pela resolução d�
 float2 uv = frag_coord / Uniforms.iResolution.xy;
 ```
 
-[Abrir a cena 01_hello_pixel](scene:01_hello_pixel) — troque uv.x por uv.y no gradiente e salve (Cmd+S): a cena recompila ao vivo.
+[Abrir a cena 01_hello_pixel](scene:01_hello_pixel): troque uv.x por uv.y no gradiente e salve (Cmd+S): a cena recompila ao vivo.
 
 ## 2. Tempo dá movimento
 
@@ -22,7 +22,7 @@ O bloco SceneUniforms entrega iTime, os segundos desde o início da cena. Passar
 float pulse = 0.5 + 0.5 * sin(Uniforms.iTime);
 ```
 
-[Abrir a cena 02_time](scene:02_time) — dê fases diferentes aos canais RGB (+0.0, +2.1, +4.2) e veja o branco se separar em cores.
+[Abrir a cena 02_time](scene:02_time): dê fases diferentes aos canais RGB (+0.0, +2.1, +4.2) e veja o branco se separar em cores.
 
 ## 3. O mouse torna o shader interativo
 
@@ -33,7 +33,7 @@ float d = distance(frag_coord, Uniforms.iMousePos);
 float light = smoothstep(radius, 0.0, d);
 ```
 
-[Abrir a cena 03_mouse](scene:03_mouse) — troque smoothstep por step e compare a borda. Depois inverta a direção (uv - dir) para o holofote repelir.
+[Abrir a cena 03_mouse](scene:03_mouse): troque smoothstep por step e compare a borda. Depois inverta a direção (uv - dir) para o holofote repelir.
 
 ## Próximo passo
 

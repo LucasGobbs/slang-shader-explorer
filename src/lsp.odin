@@ -1,8 +1,8 @@
 // Minimal LSP client for slangd (--stdio, JSON-RPC with Content-Length
 // framing). Synchronous request/response: the editor's autocomplete callback
 // runs on the render thread and slangd answers in milliseconds locally, so
-// a blocking round trip is acceptable for the workbench (the async path —
-// suggestionsPromise — is the follow-up if latency ever shows).
+// a blocking round trip is acceptable for the workbench (the async path,
+// suggestionsPromise, is the follow-up if latency ever shows).
 package main
 
 import "core:encoding/json"
@@ -106,7 +106,7 @@ lsp_notify :: proc(lsp: ^Lsp, method: string, params: string) -> bool {
 	return lsp_write_msg(lsp, body)
 }
 
-// Non-blocking: routes every queued message — responses land in `pending`
+// Non-blocking: routes every queued message: responses land in `pending`
 // by id, publishDiagnostics land in `diagnostics` by file.
 lsp_drain :: proc(lsp: ^Lsp) {
 	for {

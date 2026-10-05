@@ -7,7 +7,7 @@ import "core:strings"
 
 // Scene templates for the toolbar's "+ new" menu. A new file lands in
 // SCENES_DIR; the scene watcher discovers it on the next frame, compiles
-// it, and lists it — no code change or restart needed. Names auto-increment
+// it, and lists it: no code change or restart needed. Names auto-increment
 // (compute.slang, compute_2.slang, ...) so repeated clicks never clobber.
 
 SceneTemplateKind :: enum {

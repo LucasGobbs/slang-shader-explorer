@@ -1,7 +1,7 @@
 // Inktober day 1, second take: apple. The same SDF apple as apple.slang
 // revolved into 3D and raymarched over a paper floor plane. Two lights
-// play with the scene — a warm key orbiting over time and a cool static
-// fill — with soft shadows cast on the apple and the paper. The final
+// play with the scene: a warm key orbiting over time and a cool static
+// fill: with soft shadows cast on the apple and the paper. The final
 // color is ordered-dithered (4x4 Bayer, 5 levels per channel) into a
 // print-like palette. Single gather pass per pixel: no depth buffer.
 

@@ -1,11 +1,11 @@
-// TRAIL 01 — Hello, pixel!
+// TRAIL 01: Hello, pixel!
 // Your first shader: every pixel on screen runs pixelMain() and returns
 // its own color. The only input you need is the pixel's coordinate.
 //
 // Concepts: fragment shader, normalized coordinates (uv), color as float3.
 //
 // Try:
-//   1. Swap uv.x and uv.y in lerp(a, b, uv.x) — what changes?
+//   1. Swap uv.x and uv.y in lerp(a, b, uv.x): what changes?
 //   2. Make the gradient vertical instead of horizontal.
 //   3. Pick your own color in the inspector (the tint parameter
 //      appeared there automatically when this file declared it).

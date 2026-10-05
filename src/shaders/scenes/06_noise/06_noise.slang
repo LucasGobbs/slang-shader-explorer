@@ -1,4 +1,4 @@
-// TRAIL 06 — Noise
+// TRAIL 06: Noise
 // Procedural noise = smooth randomness. A hash gives a pseudo-random
 // value per grid cell; interpolating between cells makes it smooth;
 // layering scales (octaves) makes FBM, the texture of clouds and stone.

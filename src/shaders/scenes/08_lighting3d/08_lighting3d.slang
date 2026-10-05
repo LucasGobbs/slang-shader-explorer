@@ -1,4 +1,4 @@
-// TRAIL 08 — Lighting a 3D model
+// TRAIL 08: Lighting a 3D model
 // Same ideas, new stage: the vertex shader transforms the loaded model,
 // the fragment shader receives interpolated normals and lights them.
 // Wrapped diffuse keeps shadows soft; a rim term fakes bounce light.
@@ -8,7 +8,7 @@
 // Try:
 //   1. wrap = 0 gives hard Lambert; slide it and watch the terminator.
 //   2. Rotate the light by iTime: L = normalize(float3(cos(t), 0.8, sin(t))).
-//   3. Kill the rim term — notice how much depth it was adding.
+//   3. Kill the rim term: notice how much depth it was adding.
 import "../../common";
 
 public struct LightParams {

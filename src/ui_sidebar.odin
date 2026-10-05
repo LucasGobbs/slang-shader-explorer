@@ -551,7 +551,7 @@ ui_draw_grain :: proc(ui: ^Ui) {
 
 // Panel resize handle: an 8px strip just outside the panel's right edge
 // (inside the panel the border pixel belongs to the panel and hover never
-// reached the handle). Drag sets ui.user_w — one user width for every
+// reached the handle). Drag sets ui.user_w: one user width for every
 // mode (VS Code behavior). Amber seam while hovering/dragging.
 ui_panel_edge :: proc(ui: ^Ui, panel_x: f32) {
 	io := im.GetIO()

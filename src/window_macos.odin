@@ -1,6 +1,6 @@
 // Native macOS window tweaks. SDL has no API for window corner radius, so
 // we reach through to the NSWindow (exposed as a window property) and round
-// its content layer — the clip covers the GPU swapchain and the ImGui
+// its content layer: the clip covers the GPU swapchain and the ImGui
 // overlay, including the title bar's top corners.
 package main
 

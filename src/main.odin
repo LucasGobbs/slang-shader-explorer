@@ -22,7 +22,7 @@ import stbi "vendor:stb/image"
 
 // shader_explorer: a shader playground. Every .slang file in
 // src/shaders/scenes is a scene (compute or fullscreen graphics pass,
-// discovered and built at runtime — see scene_runtime.odin). Scenes
+// discovered and built at runtime: see scene_runtime.odin). Scenes
 // render into an offscreen texture; a single blit pipeline samples it
 // and the UI overlay draws on top. Generation time is measured per
 // frame with a GPU fence and shown as an average in the UI.
@@ -281,7 +281,7 @@ window_hit_test :: proc "c" (win: ^sdl.Window, area: ^sdl.Point, data: rawptr) -
 	if y < TITLEBAR_H && !titlebar_point_hot(x, y) {
 		// Empty bar space is natively draggable: macOS handles the drag
 		// AND its window tiling (drag-to-edge/corner snap zones), which
-		// a manual drag cannot trigger. No double-click here — the green
+		// a manual drag cannot trigger. No double-click here: the green
 		// traffic light owns fullscreen/maximize.
 		return .NORMAL if chromeless else .DRAGGABLE
 	}
@@ -757,7 +757,7 @@ main :: proc() {
 	pass_pixel_readback: PassPixelReadback
 
 	set_title :: proc(window: ^sdl.Window, title: string) {
-		if !sdl.SetWindowTitle(window, fmt.ctprint("shader_explorer — ", title)) {
+		if !sdl.SetWindowTitle(window, fmt.ctprint("shader_explorer · ", title)) {
 			log.warnf("failed to update window title: %s", sdl.GetError())
 		}
 	}
@@ -902,7 +902,7 @@ main :: proc() {
 				case .SPACE:
 					if !imgui_kb {
 						// Zen mode: hide the sidebar and the editor. The
-						// title bar stays — it is the window chrome now.
+						// title bar stays: it is the window chrome now.
 						emit(ToggleZen{})
 					}
 				case ._1, ._2, ._3, ._4, ._5, ._6, ._7, ._8, ._9:

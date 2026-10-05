@@ -273,7 +273,7 @@ model_load_gltf :: proc(gpu: ^sdl.GPUDevice, path: string) -> (Model, bool) {
 }
 
 // Icosphere fallback: subdivided icosahedron. Uniform triangles, no
-// pole singularity and no UV seam — UV spheres show cap seams and sliver
+// pole singularity and no UV seam: UV spheres show cap seams and sliver
 // artifacts under shading; an icosphere avoids the whole class.
 model_load_sphere :: proc(gpu: ^sdl.GPUDevice) -> Model {
 	SUBDIV :: 4

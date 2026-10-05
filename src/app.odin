@@ -3,7 +3,7 @@
 // (update), and the view (ui_build, the main loop) emits messages instead
 // of mutating state. Effects that touch the OS, the filesystem, or the
 // GPU are described as Cmd values and executed by the interpreter in
-// main.odin — widgets and editor code never call SDL/OS directly for
+// main.odin: widgets and editor code never call SDL/OS directly for
 // actions. GPU pipelines, scene runtime, and ImGui are untouched: this
 // layer is about data flow, not rendering.
 //

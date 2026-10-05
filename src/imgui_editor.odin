@@ -2,7 +2,7 @@
 // via the ite C wrapper): a floating window toggled with F1, separate from
 // the sidebar. Its tabs follow the active scene: the scene file plus every
 // module it transitively imports. Cmd+S is the application-wide save
-// (every dirty tab — shader files are the app's only persistent state);
+// (every dirty tab, shader files are the app's only persistent state);
 // the scene watcher rebuilds on write. Cmd+click jumps to the definition
 // (current file first, then the other .slang files, e.g. common.slang).
 package main
@@ -134,7 +134,7 @@ ImGuiEditor :: struct {
 	rename_open: bool,
 	rename_buf:  [64]u8,
 	// Navigation history (Option+'-' jumps back): cursor positions worth
-	// returning to — goto-definition origins and moves larger than a few
+	// returning to: goto-definition origins and moves larger than a few
 	// lines. Keeps the last 32 (at least the 10 requested).
 	nav_history:  [dynamic]NavPos,
 	nav_snapshot: NavPos,
@@ -155,7 +155,7 @@ NavPos :: struct {
 }
 
 // Component change callback: marks the document as needing an LSP sync,
-// and fires the typing-FX burst at the caret (throttled — a keystroke
+// and fires the typing-FX burst at the caret (throttled, a keystroke
 // storm reads as a spray, not a machine gun).
 ied_on_change :: proc "c" (user: rawptr) {
 	context = runtime.default_context()
@@ -280,7 +280,7 @@ ied_apply_theme :: proc(ed: ^ImGuiEditor) {
 	// glass re-saves from the new theme (wrapper resets the flag).
 }
 
-// The slangd instance backing autocomplete (nil when unavailable — the
+// The slangd instance backing autocomplete (nil when unavailable, the
 // editor then just never pops suggestions).
 ied_lsp: ^Lsp
 
@@ -417,7 +417,7 @@ ied_current_uri :: proc(ed: ^ImGuiEditor) -> string {
 }
 
 // Make open_docs[open_idx] the visible document, loading its buffer from the
-// stash (or disk on first open). Does NOT stash the outgoing document — use
+// stash (or disk on first open). Does NOT stash the outgoing document: use
 // ied_switch for user-driven tab switches.
 ied_show :: proc(ed: ^ImGuiEditor, open_idx: int) {
 	doc := &ed.open_docs[open_idx]
@@ -500,7 +500,7 @@ ied_load_named :: proc(ed: ^ImGuiEditor, name: string) {
 }
 
 // Closes open docs under scenes/<unit>/. On a scene switch the previous
-// unit's tabs go away — EXCEPT dirty ones: unsaved work is never
+// unit's tabs go away, EXCEPT dirty ones: unsaved work is never
 // destroyed, so those stay until the user saves (ied_save_all reaps them
 // once clean).
 ied_close_unit :: proc(ed: ^ImGuiEditor, unit: string) {
@@ -591,7 +591,7 @@ ied_scene_files :: proc(ed: ^ImGuiEditor, scene_rel: string) -> [dynamic]string 
 }
 
 // The files-list name of a scene: scenes/<title>.slang or, since scenes
-// moved to per-scene folders, scenes/<title>/<title>.slang — matched by
+// moved to per-scene folders, scenes/<title>/<title>.slang, matched by
 // base name. "" when unknown.
 ied_scene_rel :: proc(ed: ^ImGuiEditor, scene_name: string) -> string {
 	for f in ed.files {
@@ -613,7 +613,7 @@ ied_scene_rel :: proc(ed: ^ImGuiEditor, scene_name: string) -> string {
 ied_open_scene :: proc(ed: ^ImGuiEditor, scene_name: string) {
 	if scene_name == ed.last_scene do return
 	// Leaving a scene: its tabs close (dirty ones wait for the user to
-	// save — they are reaped by ied_save_all once clean).
+	// save; they are reaped by ied_save_all once clean).
 	old_scene := ed.last_scene
 	ed.last_scene = scene_name
 	ied_close_unit(ed, old_scene)
@@ -852,7 +852,7 @@ ied_open_doc :: proc(ed: ^ImGuiEditor, file_idx: int) -> (^OpenDoc, bool) {
 // Renames old_name to new_name in every shader file (the context menu's
 // "Rename symbol" command). The current document is replaced in the
 // component, open tabs in their stash, the rest on disk; every touched
-// file is written. NOTE: textual (not semantic) rename — occurrences in
+// file is written. NOTE: textual (not semantic) rename: occurrences in
 // comments and strings are replaced too.
 ied_rename :: proc(ed: ^ImGuiEditor, old_name, new_name: string) {
 	if old_name == "" || new_name == "" || old_name == new_name do return
@@ -1106,7 +1106,7 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 				}
 			}
 		case 100:
-			// Live diagnostics check: break the DOCUMENT (not the file —
+			// Live diagnostics check: break the DOCUMENT (not the file,
 			// nothing is saved) and expect slangd to flag it. The goto test
 			// above left the editor on common.slang, so reload apple first.
 			if ied_lsp != nil {
@@ -1209,7 +1209,7 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 		ied_capture_last_good(ed)
 	}
 	// when either set changes or the current file changes. build_errors is
-	// written by the scene build worker — hold its mutex while reading.
+	// written by the scene build worker: hold its mutex while reading.
 	lsp_diag_version := ied_lsp != nil ? ied_lsp.diag_version : 0
 	sync.mutex_lock(&scene_build_mu)
 	if ed.err_version != build_errors_version ||
@@ -1274,7 +1274,7 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 
 	// No toolbar: saving lives in the title bar's floppy button (and
 	// Cmd+S), browsing in the FILES sidebar mode, and appearance knobs in
-	// the strip's gear menu (ui_activity_strip). No status row either —
+	// the strip's gear menu (ui_activity_strip). No status row either:
 	// the tabs sit at the top.
 	if ied_has_current_build_error(ed) && ed.current_open >= 0 {
 		doc := &ed.open_docs[ed.current_open]

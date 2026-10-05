@@ -1,4 +1,4 @@
-// TRAIL 02 — Time
+// TRAIL 02: Time
 // The SceneUniforms block gives you iTime: seconds since the scene
 // started. Feed it through sin() and static images start to breathe.
 //
@@ -8,7 +8,7 @@
 //   1. Change speed in the inspector while watching the rings.
 //   2. Give each RGB channel a different phase (+0.0, +2.1, +4.2)
 //      and watch white light split into color.
-//   3. Replace sin with fract(t) — what does the motion become?
+//   3. Replace sin with fract(t): what does the motion become?
 import "../../common";
 
 public struct TimeParams {

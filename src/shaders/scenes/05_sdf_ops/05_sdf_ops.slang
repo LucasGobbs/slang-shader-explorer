@@ -1,8 +1,8 @@
-// TRAIL 05 — Combining SDFs
+// TRAIL 05: Combining SDFs
 // Three operators build almost every SDF scene:
-//   min(a, b)  union        — either shape
-//   max(a, b)  intersection — only where both overlap
-//   max(a,-b)  subtraction  — a with b carved out
+//   min(a, b)  union       : either shape
+//   max(a, b)  intersection: only where both overlap
+//   max(a,-b)  subtraction : a with b carved out
 // Here a circle chases a box while you morph between the three.
 //
 // Concepts: SDF boolean operators, animating shape centers.

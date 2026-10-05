@@ -1,4 +1,4 @@
-// TRAIL 03 — Mouse
+// TRAIL 03: Mouse
 // iMousePos (pixels) and iMouseClick (0/1) make the shader interactive.
 // A spotlight follows your cursor; press the button to warm the light.
 //
@@ -7,7 +7,7 @@
 //
 // Try:
 //   1. Change radius live in the inspector.
-//   2. Replace smoothstep with step — what happens to the edge?
+//   2. Replace smoothstep with step: what happens to the edge?
 //   3. Make the spotlight repel instead of attract (uv - dir).
 import "../../common";
 
@@ -29,7 +29,7 @@ VsOut vertMain(uint vertexIndex : SV_VertexID) {
 
 [shader("fragment")]
 float4 pixelMain(VsOut input) : SV_Target0 {
-    // iMousePos is in pixels — compare it against fragCoord, not uv.
+    // iMousePos is in pixels: compare it against fragCoord, not uv.
     float d = length(input.gl_FragCoord.xy - Uniforms.iMousePos);
     float light = 1.0 - smoothstep(0.0, Params.radius, d);
     float3 cool = float3(0.12, 0.25, 0.6);

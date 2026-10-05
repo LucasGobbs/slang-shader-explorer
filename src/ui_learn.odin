@@ -2,8 +2,8 @@ package main
 
 // LEARN mode: markdown-based learning trails. Pages live in
 // assets/trails/*.md; "index" is the home page. The renderer is a
-// deliberate md-lite — headers, bullets, fenced code blocks, and inline
-// links — because the feature that matters is the bridge to practice:
+// deliberate md-lite: headers, bullets, fenced code blocks, and inline
+// links: because the feature that matters is the bridge to practice:
 // [label](scene:NAME) loads the scene AND opens the editor on its entry
 // file, [label](trail:NAME) navigates between pages.
 import im "../vendor/odin-imgui"

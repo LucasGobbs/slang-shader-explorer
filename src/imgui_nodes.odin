@@ -7,7 +7,7 @@
 // model, one graphics node per vertex+fragment entry pair
 // found in the scene's files, one compute node per compute entry, and a
 // terminal "show 2d" node (the frame the viewport presents). Passes chain
-// in declaration order — a graphics node's frame output feeds the next
+// in declaration order: a graphics node's frame output feeds the next
 // pass's first texture input (e.g. phong 3D → blur compute: params →
 // graphics → compute). Links are derived from the source on a 120-frame
 // rescan; they are not user-editable. The node layout persists in the
@@ -124,7 +124,7 @@ INE_COL_LINK           :: 7
 INE_COL_LINK_HOVER     :: 8
 INE_COL_LINK_SELECT    :: 9
 
-// Body tint for a kind: the kind's hue darkened and fully OPAQUE — no
+// Body tint for a kind: the kind's hue darkened and fully OPAQUE, no
 // canvas bleeding through nodes. `bright` scales the kind color.
 sg_kind_body :: proc(kind: SgPassKind, bright: f32) -> u32 {
 	c := SG_KIND_COLORS[kind]
@@ -212,7 +212,7 @@ SgNode :: struct {
 }
 
 // Wire flavor, set from the link's semantics at creation (sg_sync):
-// decides the decoration style drawn over the imnodes base link — the
+// decides the decoration style drawn over the imnodes base link: the
 // frame chain flows, texture/mesh feeds are dashed, uniforms dotted.
 SgLinkFlavor :: enum { FRAME, UNIFORM, TEXTURE, MESH }
 
@@ -1473,7 +1473,7 @@ sg_compute_layout :: proc(ng: ^NodeGraph) {
 		}
 	}
 
-	// Nodes without a user-chosen position adopt the layered layout —
+	// Nodes without a user-chosen position adopt the layered layout:
 	// once, before their first placement. After that the position belongs
 	// to the user (imnodes owns it; sg_save persists it).
 	for &node in ng.nodes {
@@ -1578,7 +1578,7 @@ ing_panel :: proc(ng: ^NodeGraph, ed: ^ImGuiEditor, scene_title: string, maximiz
 		im.TextUnformatted(title)
 		ine_title_bar_end(ng.handle)
 		// The title bar takes the node's width (not vice versa), so long
-		// titles clip: reserve the widest text in the node body — title
+		// titles clip: reserve the widest text in the node body: title
 		// (plus its icon) OR longest pin name, since pins longer than the
 		// title clip too (inputs on the right edge, outputs on the left).
 		node_w := im.CalcTextSize(title).x + 20
@@ -1626,7 +1626,7 @@ ing_panel :: proc(ng: ^NodeGraph, ed: ^ImGuiEditor, scene_title: string, maximiz
 			}
 		}
 		// Pass preview: the frame this pass produced (previous frame's
-		// content — the graph renders before this frame's submit).
+		// content: the graph renders before this frame's submit).
 		if ng.show_previews && node.pass_idx >= 0 {
 			if tex := sg_preview_tex(node.pass_idx); tex != nil {
 				ine_static_attr_begin(
@@ -1749,7 +1749,7 @@ ing_panel :: proc(ng: ^NodeGraph, ed: ^ImGuiEditor, scene_title: string, maximiz
 
 	// Node drag trail: soft motes in the node's kind color while a node
 	// moves (hovered node + left button held + fast cursor). Must run
-	// AFTER ine_editor_end — imnodes asserts scope == None on queries.
+	// AFTER ine_editor_end: imnodes asserts scope == None on queries.
 	if io.MouseDown[im.MouseButton.Left] {
 		moved := io.MouseDelta.x * io.MouseDelta.x + io.MouseDelta.y * io.MouseDelta.y
 		nid: c.int
@@ -1905,11 +1905,11 @@ ing_panel :: proc(ng: ^NodeGraph, ed: ^ImGuiEditor, scene_title: string, maximiz
 	// scroll, deltas move the panning 1:1 (interactive, no lag) and the
 	// gesture velocity is sampled; after release the velocity glides on
 	// with exponential friction until it dies. The sign is "viewport
-	// moves with the fingers" (scroll-down drags the graph down/left) —
+	// moves with the fingers" (scroll-down drags the graph down/left),
 	// the inverse of document scrolling. The hover test is ImGui's, not
 	// imnodes' IsEditorHovered: that one is evaluated with the editor
 	// child popped (current window is the panel again), and reports false
-	// over the canvas — gating on it killed every pan. ChildWindows counts
+	// over the canvas: gating on it killed every pan. ChildWindows counts
 	// the canvas child (and the minimap) as part of the panel.
 	if im.IsWindowHovered({.ChildWindows}) && (io.MouseWheel != 0 || io.MouseWheelH != 0) {
 		d := [2]f32{io.MouseWheelH * 60, io.MouseWheel * 60}

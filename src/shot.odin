@@ -234,7 +234,7 @@ debug_watch_readback_cancel :: proc(readback: ^DebugWatchReadback, gpu: ^sdl.GPU
 	readback^ = {}
 }
 
-// exports/<title>_YYYY-MM-DD_HH-MM-SS.<ext> — one file per export, so the
+// exports/<title>_YYYY-MM-DD_HH-MM-SS.<ext>: one file per export, so the
 // exports/ folder keeps the full export history. Creates exports/ on demand.
 // Timestamp is local time (libc localtime/strftime).
 export_path :: proc(title, ext: string) -> string {

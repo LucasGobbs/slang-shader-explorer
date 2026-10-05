@@ -45,7 +45,7 @@ float hash21(float2 p) {
 }
 
 // 4x4 Bayer matrix index for the dissolve variant (ordered dithering is
-// this app's signature look — the transition wears it too).
+// this app's signature look; the transition wears it too).
 float bayer4(float2 p) {
     int2 q = int2(p) & 3;
     int idx = q.y * 4 + q.x;

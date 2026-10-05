@@ -1,4 +1,4 @@
-// TRAIL 10 — Multi-pass
+// TRAIL 10: Multi-pass
 // Until now, one pass did everything. Real effects chain passes: this
 // compute pass writes an animated pattern into out_tex, and pass_1.slang
 // reads that texture and grades it. Reflection creates typed pins; graph.json

@@ -1,13 +1,13 @@
-// TRAIL 07 — Textures
+// TRAIL 07: Textures
 // Real images join the shader as Texture2D + SamplerState. The paper
-// texture here is picked in the inspector — the sampler handles lookup
+// texture here is picked in the inspector: the sampler handles lookup
 // and filtering. We ink an SDF circle onto real paper grain.
 //
 // Concepts: texture sampling, samplers, compositing procedural with image.
 //
 // Try:
 //   1. Change the ink color in the inspector (the InkParams struct
-//      declared it — no UI code was written anywhere).
+//      declared it: no UI code was written anywhere).
 //   2. Multiply uv by 2 before sampling: the paper tiles.
 //   3. Use the paper's brightness to jitter the circle's edge (add
 //      0.02 * paper.r to d) for a hand-drawn look.

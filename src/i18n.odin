@@ -4,7 +4,7 @@ package main
 // language: UI code passes English keys to tr(), and with no catalog
 // active (EN) the key is returned unchanged. ES and PT catalogs are
 // built in code below (no .mo/.ts toolchain); missing keys fall back
-// to English. Only FIXED UI vocabulary is translated — anything coming
+// to English. Only FIXED UI vocabulary is translated: anything coming
 // from user shaders (scene names, param names, pin names) stays as-is.
 import "core:fmt"
 import "core:log"

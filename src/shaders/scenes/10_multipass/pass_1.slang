@@ -1,4 +1,4 @@
-// TRAIL 10 — pass_1: the grade
+// TRAIL 10: pass_1: the grade
 // Declaring input_tex creates this pass's typed input pin. graph.json connects
 // the first pass's out_tex to it; editing that edge changes the real runtime
 // pipeline. This pass maps the pattern to a palette and darkens the edges.

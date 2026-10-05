@@ -1,4 +1,4 @@
-// TRAIL 09 — Compute
+// TRAIL 09: Compute
 // Same picture as TRAIL 02, completely different machine. A compute
 // shader has no vertex stage: the GPU launches a grid of threads and
 // each thread writes its pixel straight into a storage texture.
@@ -6,7 +6,7 @@
 // Concepts: compute shaders, thread IDs, RWTexture, numthreads.
 //
 // Try:
-//   1. Compare with 02_time side by side — same math, new model.
+//   1. Compare with 02_time side by side: same math, new model.
 //   2. [numthreads(8,8,1)] is the workgroup size; try (16,16,1).
 //   3. Write to a NEIGHBORING pixel instead (id.xy + int2(1,0))
 //      and watch the image shift.

@@ -72,7 +72,7 @@ Ui :: struct {
 	open:           bool, // whole sidebar (SPACE = zen mode hides it)
 	mode:           SidebarMode,
 	panel_open:     bool, // clicking the active mode's icon collapses the panel
-	// Theater mode (F3): one-shortcut recording composition — sidebar
+	// Theater mode (F3): one-shortcut recording composition: sidebar
 	// hidden, editor docked open, larger type. Saved state restores on
 	// exit.
 	theater:        bool,
@@ -137,7 +137,7 @@ ui_init :: proc() -> ^Ui {
 
 // Professional dark theme: tinted neutral layers (bar / panel / frame) so
 // scene colors stay true, and one warm amber accent reserved for selection
-// and active state. Restrained color strategy — the accent never decorates,
+// and active state. Restrained color strategy: the accent never decorates,
 // it marks state. Applied once after the ImGui context exists.
 ui_apply_style :: proc() {
 	style := im.GetStyle()
@@ -219,7 +219,7 @@ ui_build :: proc(
 	fx_particles_draw(im.GetForegroundDrawList())
 
 	// Cursor trail: soft motes behind fast cursor movement (quiet by
-	// design — texture, not fireworks).
+	// design: texture, not fireworks).
 	{
 		mouse := [2]f32{io.MousePos.x, io.MousePos.y}
 		d := mouse - fx_last_mouse
@@ -289,7 +289,7 @@ ui_build :: proc(
 		// The graph canvas owns the wheel (trackpad pan). If any overlay
 		// item (preview toggle, maximize button) ever pushes the panel's
 		// content past its size, the window becomes a scroll container
-		// and ImGui consumes the wheel to scroll it — killing the pan
+		// and ImGui consumes the wheel to scroll it, killing the pan
 		// and hiding part of the editor. Pin the scroll at the origin
 		// and refuse wheel scrolling in this mode.
 		flags += {.NoScrollWithMouse, .NoScrollbar}

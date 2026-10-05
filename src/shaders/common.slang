@@ -299,7 +299,7 @@ public ModelVaryings model_scene_vertex(
     return o;
 }
 
-// Gizmo helpers: bottom-right axis indicators, opt-in — a scene calls
+// Gizmo helpers: bottom-right axis indicators, opt-in: a scene calls
 // one of these with its final color and gets the gizmo composited over
 // it. fragCoord is y-up (see frag_coord).
 
@@ -389,7 +389,7 @@ public float sdEllipse(float2 p, float2 c, float2 r, float rot) {
 
 // Apple body profile: a circle pinched horizontally at the poles, with a
 // stem well pressed into the top and a small dimple at the bottom. Not an
-// exact SDF near the dents — close enough for smoothstep fills. apple2
+// exact SDF near the dents, close enough for smoothstep fills. apple2
 // revolves this profile around the y axis.
 public float sdAppleBody(float2 p) {
     float2 q = p;

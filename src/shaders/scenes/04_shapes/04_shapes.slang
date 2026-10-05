@@ -1,12 +1,12 @@
-// TRAIL 04 — Shapes with SDF
+// TRAIL 04: Shapes with SDF
 // A signed-distance function (SDF) answers: "how far is this pixel from
 // the shape's edge?" Negative inside, positive outside. Everything else
-// — fill, outline, soft glow — is just a remap of that one number.
+//: fill, outline, soft glow: is just a remap of that one number.
 //
 // Concepts: signed distance fields, length(), smoothstep antialiasing.
 //
 // Try:
-//   1. sdBox is given below — draw a box next to the circle.
+//   1. sdBox is given below: draw a box next to the circle.
 //   2. min(d1, d2) unions two shapes: draw both at once.
 //   3. Use abs(d) instead of d in the fill: you get a ring.
 import "../../common";
