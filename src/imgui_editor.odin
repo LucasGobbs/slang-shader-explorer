@@ -123,6 +123,7 @@ ImGuiEditor :: struct {
 	hover_shown: bool,
 	hover_pin:   im.Vec2, // pinned tooltip position
 	hover_rect:  [4]f32, // last tooltip rect (min.xy, max.xy), padded
+	hover_grace: f32,    // countdown while crossing from word to tooltip
 	// FX motion state: open/close spring, the tab-switch crossfade
 	// overlay, and the status row's fade-in.
 	open_anim:    Anim,
@@ -1505,26 +1506,34 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 			m.x >= ed.hover_rect[0] && m.x <= ed.hover_rect[2] &&
 			m.y >= ed.hover_rect[1] && m.y <= ed.hover_rect[3]
 		word := ied_debug_hover_word
-		if !over_tooltip {
-			if word == "" && !im.IsMouseDown(.Left) &&
-			   ite_is_mouse_over_text(ed.handle, m.x, m.y) {
-				buf: [128]u8
-				n := ite_get_word_at_mouse(ed.handle, m.x, m.y, cstring(&buf[0]), len(buf))
-				word = string(buf[:min(int(n), 127)])
+		if !over_tooltip && word == "" && !im.IsMouseDown(.Left) &&
+		   ite_is_mouse_over_text(ed.handle, m.x, m.y) {
+			buf: [128]u8
+			n := ite_get_word_at_mouse(ed.handle, m.x, m.y, cstring(&buf[0]), len(buf))
+			word = string(buf[:min(int(n), 127)])
+		}
+		// Grace window: crossing the gap between the word and the pinned
+		// tooltip keeps it open; a different word swaps immediately.
+		if ed.hover_shown && !over_tooltip && word == "" {
+			ed.hover_grace -= io.DeltaTime
+		} else {
+			ed.hover_grace = 0.35
+		}
+		different := word != "" && word != ed.hover_word
+		gone := word == "" && word != ed.hover_word && ed.hover_grace <= 0
+		if !over_tooltip && (different || gone) {
+			delete(ed.hover_word)
+			ed.hover_word = strings.clone(word)
+			ed.hover_dwell = 0
+			if ed.hover_sig != "" {
+				delete(ed.hover_sig)
+				ed.hover_sig = ""
+				delete(ed.hover_doc)
+				ed.hover_doc = ""
 			}
-			if word != ed.hover_word {
-				delete(ed.hover_word)
-				ed.hover_word = strings.clone(word)
-				ed.hover_dwell = 0
-				if ed.hover_sig != "" {
-					delete(ed.hover_sig)
-					ed.hover_sig = ""
-					delete(ed.hover_doc)
-					ed.hover_doc = ""
-				}
-			} else if word != "" {
-				ed.hover_dwell += 1
-			}
+			ed.hover_shown = false
+		} else if !over_tooltip && word != "" {
+			ed.hover_dwell += 1
 			if ed.hover_dwell == 25 {
 				sig, doc, found := ied_lookup_symbol(ed, ed.hover_word)
 				if found {
@@ -1536,11 +1545,20 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 		show := ed.hover_dwell >= 25 && ed.hover_sig != ""
 		if show {
 			if !ed.hover_shown {
-				// Pin once near the word, clamped so the capped width
-				// stays inside the viewport.
+				// Pin beside the cursor on the side with room, like a
+				// native tooltip: right/below by default, flipping to
+				// left/above near the viewport edges.
+				line_h := im.GetTextLineHeightWithSpacing()
+				doc_lines := min(strings.count(ed.hover_doc, "\n") + 2, 15)
+				w_est := f32(470)
+				h_est := f32(doc_lines + 1) * line_h + 22
+				px := m.x + 16
+				if px + w_est > io.DisplaySize.x - 8 do px = m.x - w_est - 12
+				py := m.y + 14
+				if py + h_est > io.DisplaySize.y - 8 do py = m.y - h_est - 10
 				ed.hover_pin = {
-					clamp(m.x + 16, 8, max(8, io.DisplaySize.x - 470)),
-					clamp(m.y + 14, TITLEBAR_H + 4, max(TITLEBAR_H + 4, io.DisplaySize.y - 240)),
+					clamp(px, 8, max(8, io.DisplaySize.x - w_est)),
+					clamp(py, TITLEBAR_H + 4, max(TITLEBAR_H + 4, io.DisplaySize.y - 120)),
 				}
 			}
 			im.SetNextWindowPos(ed.hover_pin, .Always)
