@@ -1,6 +1,8 @@
 /odin
 main
 main_debug
+/main_perf*
+/main_memtrace
 *.dSYM/
 output.ppm
 output.qoi
@@ -8,6 +10,5 @@ exports/
 src/generated/scenes/
 odin_bin
 *.bin
-.impeccable
-DESIGN.md
-PRODUCT.md
+imgui.ini
+artefacts/
