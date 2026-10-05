@@ -25,20 +25,20 @@ struct KernelContext_0
 };
 
 
-#line 30
+#line 33
 [[fragment]] pixelOutput_0 pixelMain(pixelInput_0 _S1 [[stage_in]], float4 pos_0 [[position]], texture2d<float, access::sample> tex_1 [[texture(0)]], sampler tex_sampler_1 [[sampler(0)]])
 {
 
-#line 30
+#line 33
     thread KernelContext_0 kernelContext_0;
 
-#line 30
+#line 33
     (&kernelContext_0)->tex_0 = tex_1;
 
-#line 30
+#line 33
     (&kernelContext_0)->tex_sampler_0 = tex_sampler_1;
 
-#line 30
+#line 33
     pixelOutput_0 _S2 = { ((tex_1).sample((tex_sampler_1), (_S1.uv_0))) };
     return _S2;
 }

@@ -3,7 +3,7 @@
 #include <metal_texture>
 using namespace metal;
 
-#line 11 "src/shaders/blit.slang"
+#line 14 "src/shaders/blit.slang"
 struct vertMain_Result_0
 {
     float4 pos_0 [[position]];
@@ -11,7 +11,7 @@ struct vertMain_Result_0
 };
 
 
-#line 11
+#line 14
 struct VsOut_0
 {
     float4 pos_1;
@@ -19,17 +19,17 @@ struct VsOut_0
 };
 
 
-#line 11
+#line 14
 [[vertex]] vertMain_Result_0 vertMain(uint vertexIndex_0 [[vertex_id]])
 {
 
-#line 20
+#line 23
     float _S1 = float((vertexIndex_0 << 1U) & 2U);
 
-#line 20
+#line 23
     float _S2 = float(vertexIndex_0 & 2U);
 
-#line 18
+#line 21
     thread VsOut_0 o_0;
 
 
@@ -39,16 +39,16 @@ struct VsOut_0
 
     (&o_0)->uv_1 = float2(_S1, 1.0f - _S2);
 
-#line 25
+#line 28
     thread vertMain_Result_0 _S3;
 
-#line 25
+#line 28
     (&_S3)->pos_0 = o_0.pos_1;
 
-#line 25
+#line 28
     (&_S3)->uv_0 = o_0.uv_1;
 
-#line 25
+#line 28
     return _S3;
 }
 

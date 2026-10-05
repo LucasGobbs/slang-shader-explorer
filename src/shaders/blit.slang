@@ -8,6 +8,9 @@ Texture2D<float4> tex;
 [[vk::binding(1, 0)]]
 SamplerState tex_sampler;
 
+
+
+
 struct VsOut {
     float4 pos : SV_POSITION;
     float2 uv : TEXCOORD0;
