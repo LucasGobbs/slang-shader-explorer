@@ -1,7 +1,7 @@
 # Shader Explorer
 
 A desktop live-coding environment for learning and experimenting with real-time GPU
-shaders — no windowing, buffers, or pipeline boilerplate between you and the first
+shaders: no windowing, buffers, or pipeline boilerplate between you and the first
 pixel. Scenes are plain [Slang](https://shader-slang.org/) files discovered from a
 folder; saving a file recompiles it incrementally on a background thread and hot-swaps
 the pipeline. A failed build never blanks the screen: the last working pipeline stays
@@ -11,29 +11,29 @@ up and the error comes back into the editor as an annotation.
 
 ## Features
 
-- **Zero-boilerplate scenes** — a scene is a folder with a `.slang` file in
+- **Zero-boilerplate scenes**: a scene is a folder with a `.slang` file in
   `src/shaders/scenes/`; it appears in the app automatically. Ships a designed
   ten-scene learning trail (`01_hello_pixel` … `10_multipass`, one concept per
   scene with live "Try:" exercises) plus older development fixtures.
-- **Selective builds** — startup and hot reload compile only the active scene,
+- **Selective builds**: startup and hot reload compile only the active scene,
   its `pass_*.slang` modules, and imported utilities. Other scene titles stay in
   the catalog and are compiled when selected.
-- **Language-server editing** — the code editor embeds `slangd`, the official Slang
+- **Language-server editing**: the code editor embeds `slangd`, the official Slang
   language server: diagnostics, hover docs, go-to-definition, rename, completion.
-- **Reflection-checked pipeline graph** — reflection derives typed ports from the
+- **Reflection-checked pipeline graph**: reflection derives typed ports from the
   Slang declarations; `graph.json` stores the executable pass topology. Creating
   or detaching an edge in the node editor changes the runtime pipeline after a
   confirmation step. Invalid JSON, cycles, duplicate producers, missing outputs,
   or incompatible endpoints keep the last valid pipeline active.
-- **Failure-preserving hot reload** — dependency-tracked incremental builds on a
+- **Failure-preserving hot reload**: dependency-tracked incremental builds on a
   worker thread; broken code keeps the previous pipeline on screen.
-- **Assets** — OBJ model loading and texture import (stb_image); scene templates for
+- **Assets**: OBJ model loading and texture import (stb_image); scene templates for
   compute / 2D / 3D graphics.
-- **Visual debugging** — `debug_scalar`, `debug_signed`, `debug_vector`,
+- **Visual debugging**: `debug_scalar`, `debug_signed`, `debug_vector`,
   `debug_normal`, `debug_mask`, `debug_nan_inf`, compiler squiggles, async
   1×1 pixel inspection, eight GPU-watch slots per pass, multipass pixel
   provenance, and restore to the last loadable source version.
-- **Cross-platform GPU** — built on the SDL3 GPU API (Metal on macOS, SPIR-V/Vulkan
+- **Cross-platform GPU**: built on the SDL3 GPU API (Metal on macOS, SPIR-V/Vulkan
   on Linux/Windows). Currently validated on macOS/Metal (Apple Silicon).
 
 ## Requirements
@@ -73,7 +73,6 @@ src/
   imgui_nodes.odin     node editor (imnodes), reflection-driven pins, layout
   scene_templates.odin new-scene templates
   shaders/scenes/      the scene corpus (one folder per scene)
-article/               JIS article draft, bibliography, peer-review report
 vendor/                slang, odin-imgui, ImGuiColorTextEdit, imnodes, fonts
 ```
 
@@ -157,7 +156,6 @@ make build
 
 The CPU metric is the full application frame. The GPU-labelled metric is scene
 submit→fence and includes queue wait; it is not a hardware timestamp query.
-Raw repeated measurements used by the paper are in `article/benchmark_data.json`.
 
 ## License
 

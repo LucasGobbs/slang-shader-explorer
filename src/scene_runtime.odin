@@ -46,7 +46,7 @@ build_errors_clear :: proc() {
 // eliminates unused resources. A debug write like
 // `out_tex[uv] = float4(float3(1,0,0), 1.0);` doesn't use the sampled
 // paper texture, so the sampler is eliminated but out_tex stays at
-// [[texture(1)]] — while SDL binds the pass storage texture at Metal
+// [[texture(1)]], while SDL binds the pass storage texture at Metal
 // index 0. Writes land on an unbound texture and are silently discarded
 // (black screen, white GPU download, valid-looking MSL). Rule: debug
 // writes must still consume the sampled values; samplers first, storage
@@ -106,13 +106,13 @@ build_errors_parse :: proc(stderr: string) {
 	build_errors_version += 1
 }
 
-// Runtime scene system: a scene is a directory in SCENES_DIR — a small
+// Runtime scene system: a scene is a directory in SCENES_DIR: a small
 // unit owning its files: <name>/<name>.slang is the entry shader,
 // graph.json the node structure (see imgui_nodes.odin), and any further
 // .slang files are scene-owned modules. Adding a directory needs no code
 // change: the watcher (scene_poll) generates a goose manifest for the
 // found scenes, runs goose-build, and (re)builds pipelines, uniform
-// blocks, and UI widgets from slang's reflection JSON. Scenes are data —
+// blocks, and UI widgets from slang's reflection JSON. Scenes are data:
 // only infra shaders (blit, blit3d, ui) stay compiled into the app.
 //
 // Conventions for scene shaders:
@@ -583,7 +583,7 @@ scene_parse_stage_refl :: proc(
 
 // Shader format per host platform: MSL on macOS (Metal), SPIR-V elsewhere
 // (Vulkan). The baked build (goose.json) emits both; hot-reload requests
-// only the host's format. D3D12 (DXIL) is not emitted yet — honest scope.
+// only the host's format. D3D12 (DXIL) is not emitted yet; honest scope.
 SCENE_FMT      :: "msl" when ODIN_OS == .Darwin else "spv"
 SCENE_FMT_FLAG :: sdl.GPUShaderFormat{.MSL} when ODIN_OS == .Darwin else sdl.GPUShaderFormat{.SPIRV}
 SCENE_TARGET   :: "metal" when ODIN_OS == .Darwin else "spirv"
@@ -853,7 +853,7 @@ scene_entry_path :: proc(name: string) -> string {
 }
 
 // Scene-owned module files (every .slang in the scene dir except the
-// entry), sorted by name — this is the pass chain order, so chained
+// entry), sorted by name: this is the pass chain order, so chained
 // passes name themselves pass_1, pass_2, ... Returned names carry no
 // extension.
 scene_module_names :: proc(name: string) -> [dynamic]string {
@@ -876,7 +876,7 @@ scene_module_names :: proc(name: string) -> [dynamic]string {
 
 scene_names_on_disk :: proc() -> [dynamic]string {
 	// Temp-allocated: callers (scene_poll/rescan) use the list within the
-	// frame, and the main loop's per-frame free_all reclaims it — the
+	// frame, and the main loop's per-frame free_all reclaims it: the
 	// heap would otherwise grow by ~24 strings every frame forever.
 	names := make([dynamic]string, context.temp_allocator)
 	entries, err := os.read_directory_by_path(SCENES_DIR, 0, context.temp_allocator)
@@ -935,10 +935,10 @@ scenes_build :: proc(names: []string) -> bool {
 
 	// Cross-process exclusion: more than one app instance may watch the
 	// same src/shaders tree (two dev builds at once), and concurrent
-	// goose-build runs corrupt each other's artifacts — reflection files
+	// goose-build runs corrupt each other's artifacts: reflection files
 	// left truncated at 0 bytes, scenes stuck "goose-build failed"
 	// forever (seen live with graphics2d). Serialize through an O_EXCL
-	// lockfile; if another process holds it, skip this round — the next
+	// lockfile; if another process holds it, skip this round: the next
 	// rescan picks up its artifacts.
 	lock, lock_err := os.open(
 		"src/generated/scenes/.build.lock",
@@ -1007,7 +1007,7 @@ scene_release :: proc(gpu: ^sdl.GPUDevice, scene: ^RuntimeScene) {
 	delete(scene.pipeline_error)
 }
 
-// Newest mtime across the scene's entry and module files — the reload key
+// Newest mtime across the scene's entry and module files: the reload key
 // (a chained pass edit must rebuild the scene like an entry edit).
 scene_latest_mtime :: proc(name: string) -> time.Time {
 	latest: time.Time
@@ -1056,7 +1056,7 @@ scene_load :: proc(sm: ^SceneManager, gpu: ^sdl.GPUDevice, name: string) -> bool
 // scene_poll only REQUESTS a build; the worker thread runs goose-build
 // (process exec, file IO), and scene_build_pump applies the result on the
 // main thread (pipeline creation needs the GPU). Requests during a build
-// coalesce into one follow-up build. The startup scan stays synchronous —
+// coalesce into one follow-up build. The startup scan stays synchronous;
 // the first frame needs pipelines.
 
 scene_build_mu:      sync.Mutex
@@ -1069,7 +1069,7 @@ scene_applying:      bool
 scene_build_apply_cond: sync.Cond
 
 // Scenes whose load failed at a given mtime (name -> mtime, names owned).
-// A failed scene is retried only when its source changes again — a broken
+// A failed scene is retried only when its source changes again: a broken
 // shader otherwise re-runs the failing build every frame, flooding the
 // log with the same errors.
 scene_failed: map[string]time.Time
@@ -1118,7 +1118,7 @@ scene_build_worker :: proc() {
 
 // Requests a build on the worker thread (starts it lazily). A request
 // while one is in flight coalesces into a single follow-up.
-// Edit→pixel latency probe (article measurement): armed when a build is
+// Edit→pixel latency probe: armed when a build is
 // requested, marked when a scene pipeline actually swaps in scene_reload,
 // read by main after the next presented frame. Failed/no-op reloads disarm.
 latency_pending: bool

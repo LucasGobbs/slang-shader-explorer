@@ -1,7 +1,7 @@
-// Overdrive FX layer: motion primitives and ink particles. Everything is
-// bound to artefacts/DESIGN.md — the safelight amber is the only hue, motion is
-// damped ease-out, and intensity .OFF is a clean static fallback (no
-// animation, no particles, hard scene cuts, as if the layer didn't exist).
+// Overdrive FX layer: motion primitives and ink particles. The safelight
+// amber is the only hue, motion is damped ease-out, and intensity .OFF is
+// a clean static fallback (no animation, no particles, hard scene cuts,
+// as if the layer didn't exist).
 package main
 
 import im "../vendor/odin-imgui"
@@ -60,7 +60,7 @@ fx_on :: proc(fx: ^Fx) -> bool {
 	return fx.intensity != .OFF
 }
 
-// (Develop previews are DevelopPreview messages routed through update —
+// (Develop previews are DevelopPreview messages routed through update;
 // see app.odin.)
 
 // The paper texture (SDL_GPUTexture*), set by main after asset load; the
@@ -90,7 +90,7 @@ anim_step :: proc(a: ^Anim, target: f32, dt: f32, fx: ^Fx) {
 // Small CPU pool drawn on the foreground draw list. Three kinds: MOTE
 // (event bursts, the classic ink scatter), TRAIL (soft faint motes that
 // follow the cursor and dragged nodes), RING (expanding circle outline,
-// for build-ok celebrations). TRAIL is deliberately quiet — it must read
+// for build-ok celebrations). TRAIL is deliberately quiet: it must read
 // as texture, not as fireworks.
 
 FxParticleKind :: enum {

@@ -1,7 +1,7 @@
 package main
 
 // Title bar chrome: the app window is borderless (SDL_WINDOW_BORDERLESS),
-// so this file owns everything the native frame would do — traffic-light
+// so this file owns everything the native frame would do: traffic-light
 // window controls, the scene selector, save/pause, and the hot-rect
 // registry that keeps the SDL hit test (main.odin) off interactive
 // widgets. Split out of ui.odin.
@@ -11,7 +11,7 @@ import sdl "vendor:sdl3"
 
 // ---------------------------------------------------------------------------
 // Title bar: the app window is borderless (SDL_WINDOW_BORDERLESS), so this
-// bar IS the window chrome — traffic-light controls on the left, the scene
+// bar IS the window chrome: traffic-light controls on the left, the scene
 // selector beside them, "+ new", drag space, pause on the right. Empty bar
 // space drags the window and edge strips resize it via the SDL hit test in
 // main.odin; every interactive widget registers its rect below so the hit
@@ -105,7 +105,7 @@ ui_toolbar :: proc(ui: ^Ui, sm: ^SceneManager, window: ^sdl.Window, ied: ^ImGuiE
 
 	// A template-created scene appeared in the rescan: select it now.
 	// Only clear the pending title once the watcher actually discovered
-	// the new scene — the async build takes a few frames, and clearing
+	// the new scene: the async build takes a few frames, and clearing
 	// early loses the selection entirely.
 	if ui.pending_scene != "" {
 		for &s, i in sm.scenes {
@@ -135,8 +135,8 @@ ui_toolbar :: proc(ui: ^Ui, sm: ^SceneManager, window: ^sdl.Window, ied: ^ImGuiE
 	im.PushStyleColorVec4(.Border, {0, 0, 0, 0})
 	im.PushStyleVarVec2(.WindowPadding, {0, 0})
 	im.PushStyleVarVec2(.FramePadding, {10, 4})
-	// Docked chrome is square (artefacts/DESIGN.md): rounding belongs to floating
-	// surfaces only — rounded corners against flush neighbors clash.
+	// Docked chrome is square: rounding belongs to floating
+	// surfaces only: rounded corners against flush neighbors clash.
 	im.PushStyleVar(.WindowRounding, 0)
 	if im.Begin("##titlebar", nil, flags) {
 		dl := im.GetWindowDrawList()
@@ -204,7 +204,7 @@ ui_toolbar :: proc(ui: ^Ui, sm: ^SceneManager, window: ^sdl.Window, ied: ^ImGuiE
 		}
 		titlebar_mark_hot()
 
-		// Save-all (floppy) left of pause: same drawn-icon style — the font
+		// Save-all (floppy) left of pause: same drawn-icon style: the font
 		// has no 💾 glyph. Saves every dirty editor tab (ied_save_all).
 		size := f32(22)
 		save_x := io.DisplaySize.x - 10 - size - 8 - size
@@ -252,7 +252,7 @@ ui_toolbar :: proc(ui: ^Ui, sm: ^SceneManager, window: ^sdl.Window, ied: ^ImGuiE
 		}
 
 		// Pause/play on the right edge: drawn icon (the font has no ⏸/▶
-		// glyphs), one block showing the action the click will take —
+		// glyphs), one block showing the action the click will take:
 		// bars while running, triangle while paused.
 		im.SetCursorPos({io.DisplaySize.x - 10 - size, (TITLEBAR_H - size) / 2})
 		if im.InvisibleButton("##pauseplay", {size, size}) {
