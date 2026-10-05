@@ -113,11 +113,16 @@ ImGuiEditor :: struct {
 	build_success_version: int,
 	// Hover symbol docs: the word under the mouse is tracked while it
 	// dwells (~0.4 s), then resolved once into a signature + doc comment
-	// (ied_lookup_symbol) shown as a tooltip.
+	// (ied_lookup_symbol) shown as a tooltip. Once shown, the tooltip
+	// pins in place and stays alive while the mouse is inside it, so
+	// long docs can actually be scrolled.
 	hover_word:  string, // owned
 	hover_dwell: int,
 	hover_sig:   string, // owned; "" = unresolved/hidden
 	hover_doc:   string, // owned
+	hover_shown: bool,
+	hover_pin:   im.Vec2, // pinned tooltip position
+	hover_rect:  [4]f32, // last tooltip rect (min.xy, max.xy), padded
 	// FX motion state: open/close spring, the tab-switch crossfade
 	// overlay, and the status row's fade-in.
 	open_anim:    Anim,
@@ -817,6 +822,18 @@ IED_BUILTIN_DOCS := []IedBuiltinDoc {
 	},
 }
 
+// Dismiss the hover docs tooltip; ESC maps here before app quit.
+ied_hover_close :: proc(ed: ^ImGuiEditor) {
+	ed.hover_dwell = 0
+	ed.hover_shown = false
+	if ed.hover_sig != "" {
+		delete(ed.hover_sig)
+		ed.hover_sig = ""
+		delete(ed.hover_doc)
+		ed.hover_doc = ""
+	}
+}
+
 // Resolve a symbol for hover docs: current file first, then the other
 // shaders (same search order as goto-definition), then the builtin table.
 ied_lookup_symbol :: proc(ed: ^ImGuiEditor, word: string) -> (sig, doc: string, found: bool) {
@@ -1187,6 +1204,9 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 			// Hover docs visual check: force the hovered word so the
 			// signature + doc tooltip renders (screenshot target).
 			ied_debug_hover_word = "frag_coord"
+		case 155:
+			// Shortcuts tab visual check (screenshot target).
+			emit(SetMode(.SHORTCUTS))
 		case 400:
 			if ied_lsp != nil {
 				diags, has := ied_lsp.diagnostics[ied_scene_rel(ed, "apple")]
@@ -1475,43 +1495,60 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 	}
 
 	// Hover symbol docs: dwell ~0.4 s on a word over the text, then show
-	// its signature plus the doc comment above the definition.
+	// its signature plus the doc comment above the definition. Once
+	// shown, the tooltip pins and stays alive while the mouse is inside
+	// it (wheel scrolls long docs); leaving the tooltip closes it.
 	{
+		m := io.MousePos
+		over_tooltip :=
+			ed.hover_shown &&
+			m.x >= ed.hover_rect[0] && m.x <= ed.hover_rect[2] &&
+			m.y >= ed.hover_rect[1] && m.y <= ed.hover_rect[3]
 		word := ied_debug_hover_word
-		if word == "" && !im.IsMouseDown(.Left) &&
-		   ite_is_mouse_over_text(ed.handle, io.MousePos.x, io.MousePos.y) {
-			buf: [128]u8
-			n := ite_get_word_at_mouse(ed.handle, io.MousePos.x, io.MousePos.y, cstring(&buf[0]), len(buf))
-			word = string(buf[:min(int(n), 127)])
-		}
-		if word != ed.hover_word {
-			delete(ed.hover_word)
-			ed.hover_word = strings.clone(word)
-			ed.hover_dwell = 0
-			if ed.hover_sig != "" {
-				delete(ed.hover_sig)
-				ed.hover_sig = ""
-				delete(ed.hover_doc)
-				ed.hover_doc = ""
+		if !over_tooltip {
+			if word == "" && !im.IsMouseDown(.Left) &&
+			   ite_is_mouse_over_text(ed.handle, m.x, m.y) {
+				buf: [128]u8
+				n := ite_get_word_at_mouse(ed.handle, m.x, m.y, cstring(&buf[0]), len(buf))
+				word = string(buf[:min(int(n), 127)])
 			}
-		} else if word != "" {
-			ed.hover_dwell += 1
-		}
-		if ed.hover_dwell == 25 {
-			sig, doc, found := ied_lookup_symbol(ed, ed.hover_word)
-			if found {
-				ed.hover_sig = strings.clone(sig)
-				ed.hover_doc = strings.clone(doc)
+			if word != ed.hover_word {
+				delete(ed.hover_word)
+				ed.hover_word = strings.clone(word)
+				ed.hover_dwell = 0
+				if ed.hover_sig != "" {
+					delete(ed.hover_sig)
+					ed.hover_sig = ""
+					delete(ed.hover_doc)
+					ed.hover_doc = ""
+				}
+			} else if word != "" {
+				ed.hover_dwell += 1
+			}
+			if ed.hover_dwell == 25 {
+				sig, doc, found := ied_lookup_symbol(ed, ed.hover_word)
+				if found {
+					ed.hover_sig = strings.clone(sig)
+					ed.hover_doc = strings.clone(doc)
+				}
 			}
 		}
-		if ed.hover_dwell >= 25 && ed.hover_sig != "" {
+		show := ed.hover_dwell >= 25 && ed.hover_sig != ""
+		if show {
+			if !ed.hover_shown {
+				// Pin once near the word, clamped so the capped width
+				// stays inside the viewport.
+				ed.hover_pin = {
+					clamp(m.x + 16, 8, max(8, io.DisplaySize.x - 470)),
+					clamp(m.y + 14, TITLEBAR_H + 4, max(TITLEBAR_H + 4, io.DisplaySize.y - 240)),
+				}
+			}
+			im.SetNextWindowPos(ed.hover_pin, .Always)
 			// Self-test: the physical mouse may be outside the window (or
-			// never moved), so pin the tooltip inside the panel. The pin
-			// must leave room for the capped width or the viewport clips
-			// the shot (real tooltips reposition around the mouse).
+			// never moved), so pin the tooltip inside the panel.
 			if ied_debug_hover_word != "" {
 				wp := im.GetWindowPos()
-				im.SetNextWindowPos({wp.x - 40, wp.y + 160})
+				im.SetNextWindowPos({wp.x - 40, wp.y + 160}, .Always)
 			}
 			if im.BeginTooltip() {
 				// Cap the tooltip: unwrapped docs used to grow right
@@ -1527,10 +1564,14 @@ ied_panel :: proc(ed: ^ImGuiEditor) {
 					}
 					im.EndChild()
 				}
+				wp := im.GetWindowPos()
+				ws := im.GetWindowSize()
+				ed.hover_rect = {wp.x - 6, wp.y - 6, wp.x + ws.x + 6, wp.y + ws.y + 6}
 				im.PopTextWrapPos()
 				im.EndTooltip()
 			}
 		}
+		ed.hover_shown = show
 	}
 }
 
