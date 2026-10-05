@@ -12,7 +12,9 @@ RELEASE_FLAGS := -o:aggressive -microarch:native -no-bounds-check -disable-asser
 DEBUG_FLAGS   := -debug -o:none
 HOT_FLAGS     := -define:HOT_RELOAD=true
 
-.PHONY: all build shaders shaders-hot run run-optimized debug debug-optimized clean
+BUNDLE_VERSION ?= 0.1.0
+
+.PHONY: all build shaders shaders-hot run run-optimized debug debug-optimized clean bundle-apple
 
 # The integrated ImGui editor (src/imgui_editor.odin) links the
 # ImGuiColorTextEdit wrapper; every app build needs it. The wrapper MUST use
@@ -71,3 +73,9 @@ debug-optimized: shaders-hot $(APP_DEPS)
 
 clean:
 	rm -f $(BIN) $(BIN_DEBUG)
+
+# Self-contained macOS bundle + zip under builds/apple (see
+# tools/package_macos.sh). `make bundle-apple BUNDLE_VERSION=0.2.0`;
+# `tools/package_macos.sh --render-icon` also re-renders the icon.
+bundle-apple:
+	tools/package_macos.sh $(BUNDLE_VERSION)
