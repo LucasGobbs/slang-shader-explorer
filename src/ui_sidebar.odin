@@ -633,6 +633,7 @@ ui_shortcuts_panel :: proc(ui: ^Ui) {
 	ui_key_row("F1", tr("toggle shader editor"))
 	ui_key_row("F2", tr("toggle editor glass"))
 	ui_key_row("F3", tr("theater mode"))
+	ui_key_row("F4", tr("mobile theater (9:16)"))
 	ui_key_row("Space", tr("zen mode: hide panels"))
 	ui_key_row("Cmd+B", tr("toggle sidebar"))
 	ui_key_row("1-9", tr("select scene by number"))

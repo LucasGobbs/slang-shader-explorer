@@ -333,6 +333,7 @@ main :: proc() {
 	once := false
 	start_scene := 0
 	start_graph := false
+	start_mobile := false
 	force3d := false
 	shot_path := ""
 	force_color := false
@@ -373,6 +374,10 @@ main :: proc() {
 			}
 		case "--metrics":
 			show_metrics = true
+		case "--mobile":
+			// Start in mobile theater (F4): 9:16 portrait for vertical
+			// recordings.
+			start_mobile = true
 		case "--color":
 			force_color = true
 		case "--shot":
@@ -645,6 +650,7 @@ main :: proc() {
 		ui.graph_max = true
 	}
 	if ied_selftest do ied.open = true
+	if start_mobile do emit(ToggleMobile{})
 	if ing_selftest {
 		ing.scene = strings.clone(scene_mgr.scenes[scene_mgr.current].title)
 		sg_create_pass(ing, ied, .COMPUTE)
@@ -773,6 +779,9 @@ main :: proc() {
 	// won't unzoom a borderless window), so the drag is manual here.
 	unmax_drag: bool
 	unmax_off:  [2]f32 // cursor offset inside the restored window
+	// Mobile theater window geometry saved on entry (MOBILE_ENTER cmd).
+	mobile_geo_x, mobile_geo_y: i32
+	mobile_geo_w, mobile_geo_h: i32
 	main_loop: for {
 		// Reset the temp allocator every frame: every tprintf, file scan
 		frame_counter_start := sdl.GetPerformanceCounter()
@@ -900,6 +909,11 @@ main :: proc() {
 					// (demo videos). Sidebar slides out, editor opens
 					// docked right, type grows. Everything restores.
 					emit(ToggleTheater{})
+				case .F4:
+					// Mobile theater: 9:16 portrait window for vertical
+					// (TikTok/Instagram) recordings. Editor docks to the
+					// bottom half, type grows, window resizes. Restores.
+					emit(ToggleMobile{})
 				case .F2:
 					// Toggle glass mode on the code editor (transparency
 					// configurable in the settings gear popup).
@@ -1137,6 +1151,27 @@ main :: proc() {
 				sdl.SetWindowFullscreen(window, true)
 			case .FULLSCREEN_OFF:
 				sdl.SetWindowFullscreen(window, false)
+			case .MOBILE_ENTER:
+				sdl.GetWindowPosition(window, &mobile_geo_x, &mobile_geo_y)
+				sdl.GetWindowSize(window, &mobile_geo_w, &mobile_geo_h)
+				mw, mh := i32(MOBILE_W), i32(MOBILE_H)
+				bounds: sdl.Rect
+				if sdl.GetDisplayUsableBounds(sdl.GetDisplayForWindow(window), &bounds) {
+					// Display shorter than the target: scale down, keep 9:16.
+					if bounds.h < mh {
+						mh = bounds.h
+						mw = i32(f32(mh) * 9.0 / 16.0)
+					}
+					sdl.SetWindowSize(window, mw, mh)
+					nx := clamp(mobile_geo_x, bounds.x, max(bounds.x, bounds.x + bounds.w - mw))
+					ny := clamp(mobile_geo_y, bounds.y, max(bounds.y, bounds.y + bounds.h - mh))
+					sdl.SetWindowPosition(window, nx, ny)
+				} else {
+					sdl.SetWindowSize(window, mw, mh)
+				}
+			case .MOBILE_EXIT:
+				sdl.SetWindowSize(window, mobile_geo_w, mobile_geo_h)
+				sdl.SetWindowPosition(window, mobile_geo_x, mobile_geo_y)
 			case .SAVE_ALL:
 				if n := ied_save_all(ied); n > 0 {
 					// Save feedback on the floppy icon itself (amber

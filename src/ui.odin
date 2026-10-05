@@ -21,6 +21,14 @@ import sdl "vendor:sdl3"
 //   scene color params  -> im.ColorEdit3 (was three sliders)
 //   grid overlay        -> im.GetBackgroundDrawList lines + text
 
+// Mobile theater (F4): when true, the editor docks to the bottom half
+// of the portrait window. Package-level because ied_frame has no Ui.
+mobile_theater: bool
+
+// Portrait window size for vertical recordings: half of 1080×1920.
+MOBILE_W :: 540
+MOBILE_H :: 960
+
 InteractionMode :: enum {
 	AUTOROTATE,
 	MOUSE_ROTATE,
@@ -81,6 +89,13 @@ Ui :: struct {
 	saved_ed_font:  f32,
 	saved_open:     bool,
 	saved_ed_open:  bool,
+	// Mobile theater (F4): 9:16 portrait recording mode. Own saved slots
+	// (theater's saved_* would clobber if both modes nest).
+	mobile:              bool,
+	mobile_saved_ui_font: f32,
+	mobile_saved_ed_font: f32,
+	mobile_saved_open:    bool,
+	mobile_saved_ed_open: bool,
 	graph_max:      bool, // GRAPH panel maximized to the full window width
 	files_frame:    int,  // frame counter pacing the FILES-mode rescan
 	font_size:      f32,  // UI font in points; the code font is ImGuiEditor.font_size

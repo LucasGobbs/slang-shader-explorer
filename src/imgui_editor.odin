@@ -1213,6 +1213,9 @@ ied_tick :: proc(ed: ^ImGuiEditor) {
 		case 155:
 			// Shortcuts tab visual check (screenshot target).
 			emit(SetMode(.SHORTCUTS))
+		case 160:
+			// Mobile theater visual check (screenshot target).
+			emit(ToggleMobile{})
 		case 400:
 			if ied_lsp != nil {
 				diags, has := ied_lsp.diagnostics[ied_scene_rel(ed, "apple")]
@@ -1610,13 +1613,22 @@ ied_frame :: proc(ed: ^ImGuiEditor, fx: ^Fx) {
 	xoff := (1 - ed.open_anim.value) * 60
 	dock_pos := im.Vec2{io.DisplaySize.x - win_w - 8 + xoff, TITLEBAR_H + 8}
 	dock_size := im.Vec2{win_w, io.DisplaySize.y - TITLEBAR_H - 16}
+	if mobile_theater {
+		// Mobile theater (F4): editor docked to the bottom half of the
+		// portrait window; the scene plays in the top half.
+		dock_pos = {8, io.DisplaySize.y * 0.55}
+		dock_size = {io.DisplaySize.x - 16, io.DisplaySize.y * 0.45 - 8}
+	}
 	// Docked until the user drags the title bar away; then ImGui owns
 	// the position and size (still saved to imgui.ini). Forcing every
 	// frame would make the drag impossible, so the dock position is
 	// forced only during the open/close spring or when the window size
 	// changes; in between, a position mismatch below detects the drag.
 	display := [2]f32{io.DisplaySize.x, io.DisplaySize.y}
-	force := ed.open_anim.value < 1 || (!ed.moved && display != ed.dock_display)
+	force :=
+		mobile_theater ||
+		ed.open_anim.value < 1 ||
+		(!ed.moved && display != ed.dock_display)
 	if force {
 		im.SetNextWindowPos(dock_pos, .Always)
 		im.SetNextWindowSize(dock_size, .Always)

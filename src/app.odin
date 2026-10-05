@@ -21,6 +21,7 @@ TogglePanel     :: struct {}
 ToggleZen       :: struct {} // SPACE: sidebar AND editor
 ToggleSidebar   :: struct {} // Cmd+B: sidebar only
 ToggleTheater   :: struct {} // F3
+ToggleMobile    :: struct {} // F4: 9:16 portrait recording mode
 SetFxIntensity  :: FxIntensity
 ToggleFx        :: FxKind
 SaveAll         :: struct {}
@@ -42,6 +43,7 @@ Msg :: union {
 	ToggleZen,
 	ToggleSidebar,
 	ToggleTheater,
+	ToggleMobile,
 	SetFxIntensity,
 	ToggleFx,
 	SaveAll,
@@ -68,6 +70,8 @@ Cmd :: enum {
 	MINIMIZE,
 	FULLSCREEN_ON,
 	FULLSCREEN_OFF,
+	MOBILE_ENTER,
+	MOBILE_EXIT,
 	SAVE_ALL,
 	EXPORT_PNG,
 	EXPORT_GIF,
@@ -138,6 +142,37 @@ update :: proc(app: ^App, msg: Msg) -> Cmds {
 			app.ed.font_size = ui.saved_ed_font
 			ui.open = ui.saved_open
 			app.ed.open = ui.saved_ed_open
+		}
+	case ToggleMobile:
+		// Mobile theater: 9:16 portrait window for vertical recordings
+		// (TikTok/Instagram). NOT a mobile app: the window just takes
+		// phone dimensions so the capture crops cleanly. Sidebar hides,
+		// the editor docks to the bottom half, type grows (like F3).
+		ui := app.ui
+		if !ui.mobile {
+			ui.mobile = true
+			mobile_theater = true
+			ui.mobile_saved_ui_font = ui.font_size
+			ui.mobile_saved_ed_font = app.ed.font_size
+			ui.mobile_saved_open = ui.open
+			ui.mobile_saved_ed_open = app.ed.open
+			ui.font_size = 18
+			im.GetStyle().FontSizeBase = 18
+			app.ed.font_size = 21
+			ui.open = false
+			app.ed.open = true
+			app.ed.moved = false // the bottom dock wins in this mode
+			cmds += {.MOBILE_ENTER}
+		} else {
+			ui.mobile = false
+			mobile_theater = false
+			ui.font_size = ui.mobile_saved_ui_font
+			im.GetStyle().FontSizeBase = ui.mobile_saved_ui_font
+			app.ed.font_size = ui.mobile_saved_ed_font
+			ui.open = ui.mobile_saved_open
+			app.ed.open = ui.mobile_saved_ed_open
+			app.ed.moved = false
+			cmds += {.MOBILE_EXIT}
 		}
 	case SetFxIntensity:
 		app.ui.fx.intensity = m
